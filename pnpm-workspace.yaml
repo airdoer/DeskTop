@@ -1,0 +1,8 @@
+# pnpm v12+ reads build-script allowlist from here instead of package.json
+# https://pnpm.io/settings#onlybuiltdependencies
+onlyBuiltDependencies:
+  - esbuild
+  - '@parcel/watcher'
+  - electron-winstaller
+  - bufferutil
+  - utf-8-validate
