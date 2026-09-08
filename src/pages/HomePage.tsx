@@ -1,4 +1,4 @@
-import { Page, PageBody, PageHeader } from '@/components/layout/Page'
+import { Page, PageBody } from '@/components/layout/Page'
 import { EmptyState } from '@/components/layout/EmptyState'
 import { SystemInfoPanel } from '@/features/system-info/SystemInfoPanel'
 import { QuickDirectoriesPanel } from '@/features/quick-directories/QuickDirectoriesPanel'
@@ -12,7 +12,7 @@ import { QuickDirectoriesPanel } from '@/features/quick-directories/QuickDirecto
 export function HomePage() {
   return (
     <Page>
-      <PageHeader title="主页" description="本机信息与常用目录" />
+      {/* 主页不显示页面标题栏：左侧导航已标明当前位置，内容区直接铺开 */}
       <PageBody>
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
           <SystemInfoPanel />

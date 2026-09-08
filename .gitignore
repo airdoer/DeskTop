@@ -33,3 +33,6 @@ yarn.lock
 /playwright/.cache/
 
 test/screenshots
+
+# WorkBuddy project data
+.workbuddy-ai/

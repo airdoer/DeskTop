@@ -16,11 +16,11 @@ export function SystemInfoPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (forceRefresh = false) => {
     setLoading(true)
     setError(undefined)
     try {
-      setInfo(await getSystemInfo())
+      setInfo(await getSystemInfo(forceRefresh))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -42,12 +42,21 @@ export function SystemInfoPanel() {
     }
   }, [])
 
+  // 主 IPv4（默认路由所在网卡）之外仍然有效的地址
+  const others = info ? info.ipv4List.filter((ip) => ip !== info.ipv4) : []
+
   return (
     <Panel
       title="系统信息"
       description="当前主机网络标识"
       actions={
-        <AppButton variant="ghost" size="sm" onClick={load} loading={loading} aria-label="刷新">
+        <AppButton
+          variant="ghost"
+          size="sm"
+          onClick={() => void load(true)}
+          loading={loading}
+          aria-label="刷新"
+        >
           <RefreshIcon size={14} />
           刷新
         </AppButton>
@@ -70,9 +79,9 @@ export function SystemInfoPanel() {
               ) : null
             }
           />
-          {info.ipv4List.length > 1 && (
+          {others.length > 0 && (
             <div className="mt-1 pl-[92px] flex flex-col gap-0.5">
-              {info.ipv4List.slice(1).map((ip) => (
+              {others.map((ip) => (
                 <InfoRow key={ip} label="" value={ip} onCopy={() => copy(ip, 'IPv4')} compact />
               ))}
             </div>
