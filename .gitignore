@@ -36,3 +36,9 @@ test/screenshots
 
 # WorkBuddy project data
 .workbuddy-ai/
+
+# portable build output
+release-portable
+
+# build artifacts (builds/<version>/installer|portable|dir)
+builds

@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && electron-builder",
+    "build:portable": "vite build && electron-builder --win portable",
     "preview": "vite preview",
     "pretest": "vite build --mode=test",
     "test": "vitest run",

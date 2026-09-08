@@ -35,6 +35,18 @@ if (process.platform === 'win32' && os.release().startsWith('6.1')) app.disableH
 // Set application name for Windows 10+ notifications
 if (process.platform === 'win32') app.setAppUserModelId(app.getName())
 
+/*
+ * 便携版（electron-builder target: portable）支持.
+ * 便携 exe 是自解压包，运行时解压到临时目录执行，仅通过 PORTABLE_EXECUTABLE_DIR
+ * 暴露 exe 所在目录。默认 userData 仍在 %APPDATA%，配置不会跟着 exe 走；
+ * 这里把 userData 重定向到 exe 同级的 "Portable Settings" 目录，
+ * 使「常用目录配置」等数据随 exe 一起携带（U 盘/多机复制即可用）。
+ */
+const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
+if (portableDir) {
+  app.setPath('userData', path.join(portableDir, 'Portable Settings'))
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
   process.exit(0)

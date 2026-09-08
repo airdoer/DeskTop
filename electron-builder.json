@@ -3,7 +3,7 @@
   "appId": "YourAppID",
   "asar": true,
   "directories": {
-    "output": "release/${version}"
+    "output": "builds/${version}"
   },
   "files": [
     "dist-electron",
@@ -32,6 +32,9 @@
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false
+  },
+  "portable": {
+    "artifactName": "${productName}_${version}_portable.${ext}"
   },
   "publish": {
     "provider": "github",
