@@ -6,25 +6,47 @@ rem  Mode 3/3 : Unpacked folder (no installation, fastest startup)
 rem             Ship / zip the whole win-unpacked folder as-is.
 rem  Output   : builds\<version>\dir\win-unpacked\
 rem ------------------------------------------------------------
-set "OUT=%OUT_ROOT%\dir"
-rem electron-builder expects the override value unquoted; forward slashes are safest on Windows
-set "OUT_ARG=builds/%VERSION%/dir"
+set "OUT_BASE=%OUT_ROOT%\dir"
 
 echo ============================================
 echo  Build [3/3] Unpacked folder (no install)
 echo ============================================
 echo Version : %VERSION%
+
+echo [1/3] Preparing output directory ...
+call "%~dp0_prepare-out.bat" "%OUT_BASE%"
 echo Output  : %PROJECT_DIR%\%OUT%\win-unpacked
+if /i not "%OUT%"=="%OUT_BASE%" (
+    echo [WARN] The previous output is locked, writing to a new directory.
+)
 echo.
 
-echo [1/2] Building renderer + main ...
+echo [2/3] Building renderer + main ...
 call %RUNNER% vite build
 if errorlevel 1 goto fail
 
-echo [2/2] Packaging (dir) ...
+echo [3/3] Packaging (dir) ...
 call %RUNNER% electron-builder --win --dir --x64 -c.directories.output=%OUT_ARG%
-if errorlevel 1 goto fail
+if not errorlevel 1 goto verify
 
+set RETRY_LEFT=3
+:retry_loop
+echo.
+echo [WARN] Packaging failed (retries left: %RETRY_LEFT%). Common cause: the
+echo        previous win-unpacked\electron-vite-react.exe is still locked by
+echo        AV scan / explorer / a stale app instance. Killing stale processes,
+echo        waiting for the lock to release, clearing output, then retrying ...
+call "%~dp0_pre-retry.bat" "%OUT_BASE%"
+if /i not "%OUT%"=="%OUT_BASE%" (
+    echo [WARN] Retried in a new directory: %OUT%
+)
+call %RUNNER% electron-builder --win --dir --x64 -c.directories.output=%OUT_ARG%
+if not errorlevel 1 goto verify
+set /a RETRY_LEFT-=1
+if %RETRY_LEFT% GTR 0 goto retry_loop
+goto fail
+
+:verify
 set "EXE=%PROJECT_DIR%\%OUT%\win-unpacked\%APP_NAME%.exe"
 if not exist "%EXE%" (
     echo [ERROR] artifact not found: %EXE%
@@ -42,6 +64,11 @@ exit /b 0
 
 :fail
 echo.
-echo [ERROR] Build failed!
+echo [ERROR] Build failed! Inspect the electron-builder stack trace above:
+echo         - "Icon must be at least 256x256 pixels" -> replace build\icon.ico
+echo           and build\icon.png with a 256x256+ image, then rebuild.
+echo         - "EBUSY / resource busy or locked" -> a process still holds
+echo           win-unpacked\electron-vite-react.exe (AV scan, explorer, or a
+echo           running instance). Close it or reboot, then retry.
 pause
 exit /b 1
