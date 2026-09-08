@@ -32,7 +32,10 @@ if not errorlevel 1 (
     set "PKG=pnpm run"
 )
 
-for /f "delims=" %%i in ('node -p "require('./package.json').name"') do set "APP_NAME=%%i"
+rem APP_NAME follows electron-builder's product name so the verify step can find
+rem the real executable (defaults to package.json "name" when productName is unset,
+rem e.g. "DeskTop" here -> win-unpacked\DeskTop.exe).
+for /f "delims=" %%i in ('node -p "require('./package.json').productName || require('./package.json').name"') do set "APP_NAME=%%i"
 for /f "delims=" %%i in ('node -p "require('./package.json').version"') do set "VERSION=%%i"
 
 rem Unified output root: builds\<version>\<mode>

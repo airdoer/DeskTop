@@ -1,7 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "YourAppID",
+  "appId": "com.c7.desktop",
+  "productName": "DeskTop",
   "asar": true,
+  "icon": "build/icon",
   "directories": {
     "output": "builds/${version}"
   },

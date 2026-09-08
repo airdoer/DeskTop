@@ -1,5 +1,6 @@
 {
   "name": "electron-vite-react",
+  "productName": "DeskTop",
   "version": "2.3.0",
   "private": true,
   "description": "Electron Vite React boilerplate.",

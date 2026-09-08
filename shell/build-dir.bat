@@ -33,7 +33,7 @@ set RETRY_LEFT=3
 :retry_loop
 echo.
 echo [WARN] Packaging failed (retries left: %RETRY_LEFT%). Common cause: the
-echo        previous win-unpacked\electron-vite-react.exe is still locked by
+echo        previous win-unpacked\%APP_NAME%.exe is still locked by
 echo        AV scan / explorer / a stale app instance. Killing stale processes,
 echo        waiting for the lock to release, clearing output, then retrying ...
 call "%~dp0_pre-retry.bat" "%OUT_BASE%"
@@ -68,7 +68,7 @@ echo [ERROR] Build failed! Inspect the electron-builder stack trace above:
 echo         - "Icon must be at least 256x256 pixels" -> replace build\icon.ico
 echo           and build\icon.png with a 256x256+ image, then rebuild.
 echo         - "EBUSY / resource busy or locked" -> a process still holds
-echo           win-unpacked\electron-vite-react.exe (AV scan, explorer, or a
+echo           win-unpacked\%APP_NAME%.exe (AV scan, explorer, or a
 echo           running instance). Close it or reboot, then retry.
 pause
 exit /b 1
