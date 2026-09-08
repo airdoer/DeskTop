@@ -1,9 +1,10 @@
-import { app, BrowserWindow, shell, ipcMain } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, Menu } from 'electron'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import os from 'node:os'
 import { update } from './update'
+import { registerIpcHandlers } from './ipc'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -45,8 +46,14 @@ const indexHtml = path.join(RENDERER_DIST, 'index.html')
 
 async function createWindow() {
   win = new BrowserWindow({
-    title: 'Main window',
+    title: 'C7 DeskTop',
     icon: path.join(process.env.VITE_PUBLIC, 'favicon.ico'),
+    width: 1200,
+    height: 760,
+    minWidth: 960,
+    minHeight: 600,
+    backgroundColor: '#fafafa',
+    autoHideMenuBar: true,
     webPreferences: {
       preload,
       // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
@@ -81,7 +88,13 @@ async function createWindow() {
   update(win)
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  // Remove the default application menu bar (per requirement: no menu bar).
+  // The Sidebar inside the renderer provides primary navigation instead.
+  Menu.setApplicationMenu(null)
+  registerIpcHandlers()
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   win = null
