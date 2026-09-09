@@ -22,6 +22,17 @@ export interface QuickDirectory {
   id: string
   name: string
   path: string
+  /** 标识色 #rrggbb，可选；缺省时由 Renderer 稳定派生 */
+  color?: string
+  /** 图标字母标识，最多 2 个字符，可选 */
+  badge?: string
+}
+
+export interface PathStat {
+  path: string
+  name: string
+  exists: boolean
+  isDirectory: boolean
 }
 
 interface QuickDirsStore {
@@ -30,6 +41,8 @@ interface QuickDirsStore {
 
 const MAX_DIRECTORIES = 5
 const STORE_FILE = 'quick-directories.json'
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+const MAX_BADGE_LENGTH = 2
 
 function storePath(): string {
   return path.join(app.getPath('userData'), STORE_FILE)
@@ -240,13 +253,37 @@ export function registerIpcHandlers(): void {
     const cleaned = (dirs ?? [])
       .filter((d) => d && typeof d.path === 'string' && d.path.trim().length > 0)
       .slice(0, MAX_DIRECTORIES)
-      .map((d, idx) => ({
-        id: d.id?.trim() || `dir-${Date.now()}-${idx}`,
-        name: (d.name?.trim() || d.path).slice(0, 40),
-        path: d.path.trim(),
-      }))
+      .map((d, idx): QuickDirectory => {
+        const item: QuickDirectory = {
+          id: d.id?.trim() || `dir-${Date.now()}-${idx}`,
+          name: (d.name?.trim() || d.path).slice(0, 40),
+          path: d.path.trim(),
+        }
+        // 仅接受合法 #rrggbb，避免任意字符串进入持久化数据
+        if (typeof d.color === 'string' && HEX_COLOR.test(d.color.trim())) {
+          item.color = d.color.trim().toLowerCase()
+        }
+        const badge = typeof d.badge === 'string' ? d.badge.trim().slice(0, MAX_BADGE_LENGTH) : ''
+        if (badge.length > 0) item.badge = badge
+        return item
+      })
     await writeStore({ directories: cleaned })
     return cleaned
+  })
+
+  /** 探测路径类型（拖拽落盘校验用）：只返回最小必要信息，不暴露目录内容 */
+  ipcMain.handle('path:stat', async (_, targetPath: string): Promise<PathStat> => {
+    if (!targetPath || typeof targetPath !== 'string') {
+      return { path: '', name: '', exists: false, isDirectory: false }
+    }
+    const normalized = targetPath.trim()
+    const name = path.basename(normalized)
+    try {
+      const stat = await fs.stat(normalized)
+      return { path: normalized, name, exists: true, isDirectory: stat.isDirectory() }
+    } catch {
+      return { path: normalized, name, exists: false, isDirectory: false }
+    }
   })
 
   ipcMain.handle('quick-dirs:open', async (_, targetPath: string): Promise<{ ok: boolean; error?: string }> => {

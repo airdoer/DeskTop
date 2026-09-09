@@ -1,4 +1,4 @@
-import { ipcRenderer, contextBridge } from 'electron'
+import { ipcRenderer, contextBridge, webUtils } from 'electron'
 
 // --------- Expose some API to the Renderer process ---------
 contextBridge.exposeInMainWorld('ipcRenderer', {
@@ -17,6 +17,18 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
   invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
     const [channel, ...omit] = args
     return ipcRenderer.invoke(channel, ...omit)
+  },
+
+  /**
+   * 将拖拽/选择的 File 解析为磁盘绝对路径（Electron ≥ 32 推荐做法）。
+   * File.path 已废弃且不可靠，统一由 preload 通过 webUtils 提供。
+   */
+  getPathForFile(file: File): string {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
   },
 
   // You can expose other APTs you need here.
