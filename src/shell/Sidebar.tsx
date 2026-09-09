@@ -80,7 +80,7 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
 
 function BrandHeader() {
   return (
-    <div className="flex items-center gap-2 h-12 px-3 border-b border-border-subtle">
+    <div className="app-region-drag flex items-center gap-2 h-12 px-3 border-b border-border-subtle">
       <C7Logo size={22} />
       <span className="text-[13px] font-semibold text-foreground leading-5">C7 DeskTop</span>
     </div>

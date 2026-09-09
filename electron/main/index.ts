@@ -52,6 +52,12 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0)
 }
 
+/**
+ * 窗口控制按钮浮层高度（px）。
+ * 渲染进程需要留出同等高度的顶部区域避让，见 src/shell/AppShell.tsx。
+ */
+const TITLE_BAR_OVERLAY_HEIGHT = 36
+
 let win: BrowserWindow | null = null
 const preload = path.join(__dirname, '../preload/index.mjs')
 const indexHtml = path.join(RENDERER_DIST, 'index.html')
@@ -66,6 +72,17 @@ async function createWindow() {
     minHeight: 600,
     backgroundColor: '#fafafa',
     autoHideMenuBar: true,
+    /*
+     * 无标题栏：内容区直接顶到窗口顶部（full size content window）。
+     * Windows 下 hidden 必须配合 titleBarOverlay，否则连最小化/最大化/关闭按钮都没有。
+     * 浮层高度与 src/shell/AppShell.tsx 顶部拖拽区高度（TITLE_BAR_OVERLAY_HEIGHT）保持一致。
+     */
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#fafafa', // 与 surface-2 / 侧边栏底色一致，浮层视觉上不可见
+      symbolColor: '#595959',
+      height: TITLE_BAR_OVERLAY_HEIGHT,
+    },
     webPreferences: {
       preload,
       // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
