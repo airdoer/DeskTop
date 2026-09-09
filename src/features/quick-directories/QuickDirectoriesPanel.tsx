@@ -29,8 +29,8 @@ import {
 } from '@/services/quickDirectories'
 
 /*
- * QuickDirectoriesPanel — Business Feature：管理最多 5 个常用 Windows 资源
- * 管理器目录，点击快速跳转。
+ * QuickDirectoriesPanel — Business Feature：管理最多 MAX_QUICK_DIRECTORIES 个
+ * 常用 Windows 资源管理器目录，点击快速跳转。
  * 依据 docs/UI_DESIGN_SYSTEM.md §25/§26，shell.openPath / dialog / webUtils 经 IPC Service；
  * §21 Empty State 清晰、可操作；§11.1 操作反馈用 Toast。
  *

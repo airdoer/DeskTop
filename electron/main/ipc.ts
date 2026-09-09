@@ -39,7 +39,8 @@ interface QuickDirsStore {
   directories: QuickDirectory[]
 }
 
-const MAX_DIRECTORIES = 5
+/** 常用目录上限，与 src/services/quickDirectories.ts 的 MAX_QUICK_DIRECTORIES 必须保持一致 */
+const MAX_DIRECTORIES = 10
 const STORE_FILE = 'quick-directories.json'
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 const MAX_BADGE_LENGTH = 2

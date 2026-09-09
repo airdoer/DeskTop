@@ -14,7 +14,8 @@ export interface QuickDirectory {
   badge?: string
 }
 
-export const MAX_QUICK_DIRECTORIES = 5
+/** 常用目录上限，与 electron/main/ipc.ts 的 MAX_DIRECTORIES 必须保持一致 */
+export const MAX_QUICK_DIRECTORIES = 10
 
 /** 可选标识色：取自既有语义色板（与 index.css tokens 同源），低饱和、克制 */
 export const DIRECTORY_COLORS: ReadonlyArray<{ value: string; label: string }> = [
