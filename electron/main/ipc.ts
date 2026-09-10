@@ -13,6 +13,17 @@ import {
   type P4Workspace,
 } from './p4'
 import { sanitizeLabelsMap, type WorkspaceLabels } from './p4Labels'
+import {
+  CODE_PAGE_REG_KEY,
+  MAINLINE_STREAM,
+  evaluateEncoding,
+  findMainlineWorkspace,
+  fixScriptPath,
+  parseRegQueryOutput,
+  type CodePageValues,
+  type EncodingRepairResult,
+  type EncodingStatus,
+} from './encoding'
 import { fetchRedmineIssues } from './redmine'
 import { normalizeWebsiteUrl, sanitizeWebsiteConfig, type WebsiteConfig } from './websites'
 
@@ -341,6 +352,44 @@ function resolvePowerShell(): string {
   return existsSync(full) ? full : 'powershell'
 }
 
+/** reg.exe 与 PowerShell 同目录，优先用绝对路径（PATH 可能被精简） */
+function resolveReg(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+  const full = path.join(systemRoot, 'System32', 'reg.exe')
+  return existsSync(full) ? full : 'reg'
+}
+
+/*
+ * 读取系统代码页（ACP / OEMCP / MACCP）。
+ * 「设置编码格式（需要以管理员运行）.bat」把这三个值改成 65001，这里只读不写，
+ * 失败时返回空对象，由 evaluateEncoding 判定为「未设置 → 非 UTF-8」。
+ */
+async function readCodePages(): Promise<CodePageValues> {
+  try {
+    return parseRegQueryOutput(await runCommand(resolveReg(), ['query', CODE_PAGE_REG_KEY], 5000))
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * 以管理员权限启动目标程序（UAC 提权）。
+ * Electron 的 shell.openPath 不支持 runas，因此借 PowerShell 的 Start-Process -Verb RunAs。
+ * 提权窗口会阻塞等待用户确认，故 detached 启动后立即返回，不等待结果。
+ */
+function launchElevated(target: string): void {
+  const script = `Start-Process -FilePath '${target.replace(/'/g, "''")}' -Verb RunAs`
+  const child = spawn(
+    resolvePowerShell(),
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    { detached: true, stdio: 'ignore', windowsHide: true },
+  )
+  child.on('error', () => {
+    /* 启动失败无需向上抛：UI 已提示脚本路径，用户可手动执行 */
+  })
+  child.unref()
+}
+
 /*
  * 查询 Windows 网卡描述与默认路由归属（PowerShell，结果缓存 5 分钟）。
  * 失败时返回空 Map，调用方退化为「仅按接口名过滤」，不会阻断主流程。
@@ -459,6 +508,71 @@ export function registerIpcHandlers(): void {
       ipv4List: list,
       platform: process.platform,
     }
+  })
+
+  /*
+   * 系统编码检测（UTF-8）：
+   *   1. reg query HKLM\...\Nls\CodePage → ACP / OEMCP / MACCP（脚本写入 65001）
+   *   2. p4 set                          → P4CHARSET（脚本写入 utf8）
+   * 任一步失败只降级对应字段（note 说明），不抛异常，避免整个面板拿不到数据。
+   */
+  ipcMain.handle('system-info:encoding', async (): Promise<EncodingStatus> => {
+    if (process.platform !== 'win32') {
+      return { ok: false, acpOk: false, note: '仅 Windows 支持编码检测' }
+    }
+    const codePages = await readCodePages()
+    const p4 = resolveP4Executable()
+    if (!p4) return evaluateEncoding(codePages)
+    try {
+      const env = parseP4Set(await runCommand(p4, ['set'], P4_SET_TIMEOUT_MS))
+      return evaluateEncoding(codePages, { checked: true, charset: env.P4CHARSET })
+    } catch {
+      return evaluateEncoding(codePages)
+    }
+  })
+
+  /*
+   * 执行编码修复脚本：
+   *   找到 stream 为 //C7/Development/Mainline 的 P4 工作区
+   *   → 拼接 <root>\Design\设置编码格式（需要以管理员运行）.bat
+   *   → 校验存在后以管理员权限启动（脚本自身需要管理员，并会提示重启）。
+   * 只做定位与启动，不在此处修改注册表——改注册表属于脚本职责，保持单一入口。
+   */
+  ipcMain.handle('encoding:repair', async (): Promise<EncodingRepairResult> => {
+    const p4 = resolveP4Executable()
+    if (!p4) return { ok: false, error: '未检测到 p4 命令行工具' }
+
+    let env: Record<string, string> = {}
+    try {
+      env = parseP4Set(await runCommand(p4, ['set'], P4_SET_TIMEOUT_MS))
+    } catch {
+      /* P4USER 缺失时退化为查询全部 client，不影响后续 */
+    }
+
+    let output: string
+    try {
+      const user = env.P4USER ?? ''
+      output = await runCommand(
+        p4,
+        user ? ['-ztag', 'clients', '-u', user] : ['-ztag', 'clients'],
+        P4_CLIENTS_TIMEOUT_MS,
+      )
+    } catch (e) {
+      return { ok: false, error: shortenP4Error(e) }
+    }
+
+    const workspace = findMainlineWorkspace(parseTaggedClients(output))
+    if (!workspace) {
+      return { ok: false, error: `未找到 stream 为 ${MAINLINE_STREAM} 的 P4 工作区` }
+    }
+
+    const scriptPath = fixScriptPath(workspace.root)
+    if (!existsSync(scriptPath)) {
+      return { ok: false, error: '未找到修复脚本', root: workspace.root, scriptPath }
+    }
+
+    launchElevated(scriptPath)
+    return { ok: true, root: workspace.root, scriptPath }
   })
 
   ipcMain.handle('quick-dirs:get', async (): Promise<QuickDirectory[]> => {
