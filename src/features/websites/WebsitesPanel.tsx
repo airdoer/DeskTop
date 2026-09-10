@@ -172,7 +172,13 @@ export function WebsitesPanel() {
   const saveForm = useCallback(async () => {
     const url = normalizeWebsiteUrl(formUrl)
     if (!url) {
-      toast.warning('请填写有效的链接（http/https）')
+      // 提示里带上实际收到的内容：链接框留空（填到了名称框）与链接非法是两种常见误操作
+      const trimmed = formUrl.trim()
+      toast.warning(
+        trimmed
+          ? `链接无效：${trimmed.slice(0, 40)}，仅支持 http/https`
+          : '请填写链接（在「名称」右侧的输入框）',
+      )
       return
     }
     const name = formName.trim().slice(0, 40) || deriveWebsiteName(url)

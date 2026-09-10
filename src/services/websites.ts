@@ -77,6 +77,30 @@ function parseHttpUrl(candidate: string): string | null {
 }
 
 /**
+ * 兜底解析：WHATWG URL 解析失败时的宽容处理。
+ *
+ * 存在性说明：URL 的实现随运行时而异（Node / Chromium 版本、宿主环境都可能不同），
+ * 个别环境下合法链接也会被判为无效，用户侧表现为"明明填的是正常链接却提示无效"。
+ * 站点链接只用于 shell.openExternal，打开前主进程还会再做一次 http/https 白名单校验，
+ * 因此这里对「形态正常、但严格解析失败」的输入放宽：补 https:// 后接受。
+ *
+ * 安全边界（不可放宽）：
+ *   - 只认 http/https 或没有 scheme 的输入，javascript: / file: / data: 一律返回 null；
+ *   - 不接受含空白字符的输入，主机名只允许常见字符 + 可选端口。
+ */
+function fallbackUrl(value: string): string | null {
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(value)?.[1]?.toLowerCase()
+  if (scheme && scheme !== 'http' && scheme !== 'https') return null
+  if (/\s/.test(value)) return null
+  const withoutScheme = value.replace(/^https?:\/{0,2}/i, '')
+  if (!withoutScheme) return null
+  const host = withoutScheme.split(/[/?#]/)[0]
+  if (!/^[a-zA-Z0-9._~%-]+(:\d+)?$/i.test(host)) return null
+  if (!/[a-zA-Z0-9]/.test(host)) return null
+  return `https://${withoutScheme}`
+}
+
+/**
  * 链接规范化：补全协议、限定 http/https。
  * 非法或空白返回 null（由调用方提示），避免 javascript: 等协议进入持久化数据。
  *
@@ -91,8 +115,8 @@ function parseHttpUrl(candidate: string): string | null {
 export function normalizeWebsiteUrl(raw: string): string | null {
   const value = normalizeUrlInput(raw)
   if (!value) return null
-  if (HAS_SCHEME.test(value)) return parseHttpUrl(value)
-  return parseHttpUrl(`https://${value}`) ?? parseHttpUrl(value)
+  if (HAS_SCHEME.test(value)) return parseHttpUrl(value) ?? fallbackUrl(value)
+  return parseHttpUrl(`https://${value}`) ?? parseHttpUrl(value) ?? fallbackUrl(value)
 }
 
 /** 由链接派生默认名称：取主机名（去掉 www. 前缀），失败时回退完整链接 */

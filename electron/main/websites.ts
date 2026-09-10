@@ -66,6 +66,25 @@ function parseHttpUrl(candidate: string): string | null {
 }
 
 /**
+ * 兜底解析：WHATWG URL 解析失败时的宽容处理（与 src/services/websites.ts 等价，改必须同步）。
+ * 站点链接最终经 shell.openExternal 打开，主进程的 web:open-external 还会再做一次
+ * http/https 白名单校验，因此严格解析失败时可以对形态正常的输入放宽：补 https:// 后接受。
+ * 安全边界：只认 http/https 或无 scheme；javascript: / file: / data: 一律 null；
+ * 不接受含空白的输入，主机名只允许常见字符 + 可选端口。
+ */
+function fallbackUrl(value: string): string | null {
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(value)?.[1]?.toLowerCase()
+  if (scheme && scheme !== 'http' && scheme !== 'https') return null
+  if (/\s/.test(value)) return null
+  const withoutScheme = value.replace(/^https?:\/{0,2}/i, '')
+  if (!withoutScheme) return null
+  const host = withoutScheme.split(/[/?#]/)[0]
+  if (!/^[a-zA-Z0-9._~%-]+(:\d+)?$/i.test(host)) return null
+  if (!/[a-zA-Z0-9]/.test(host)) return null
+  return `https://${withoutScheme}`
+}
+
+/**
  * 链接规范化：补全协议并限定 http/https，防止 javascript: 等危险协议进入持久化数据。
  * 与 src/services/websites.ts 的 normalizeWebsiteUrl 等价（主进程无法反向 import 渲染层），
  * 改逻辑必须同步，并在 test/websites.test.ts 中同时断言两侧结果一致。
@@ -74,8 +93,8 @@ export function normalizeWebsiteUrl(raw: unknown): string | null {
   if (typeof raw !== 'string') return null
   const value = normalizeUrlInput(raw)
   if (!value || value.length > MAX_URL_LENGTH) return null
-  if (HAS_SCHEME.test(value)) return parseHttpUrl(value)
-  return parseHttpUrl(`https://${value}`) ?? parseHttpUrl(value)
+  if (HAS_SCHEME.test(value)) return parseHttpUrl(value) ?? fallbackUrl(value)
+  return parseHttpUrl(`https://${value}`) ?? parseHttpUrl(value) ?? fallbackUrl(value)
 }
 
 /** id 列表净化：去空白、去重、限量、限长 */

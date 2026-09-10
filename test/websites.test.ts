@@ -108,6 +108,26 @@ describe('normalizeWebsiteUrl', () => {
     expect(normalizeUrlMain('localhost:8080')).toBe('https://localhost:8080/')
     expect(normalizeUrlMain(123 as unknown as string)).toBeNull()
   })
+
+  /*
+   * 兜底路径：严格解析（new URL）之外的宽容分支。
+   * 站点链接打开前主进程还有一层 http/https 白名单，这里只需保证"形态正常就别拒"。
+   */
+  it('兜底：形态正常但严格解析失败时仍接受', () => {
+    expect(normalizeWebsiteUrl('https://www.baidu.com/')).toBe('https://www.baidu.com/')
+    expect(normalizeWebsiteUrl('http://www.baidu.com/')).toBe('http://www.baidu.com/')
+    expect(normalizeWebsiteUrl('https://a.example.com:8443/x?y=1#z')).toBe(
+      'https://a.example.com:8443/x?y=1#z',
+    )
+  })
+
+  it('兜底不放松安全边界：危险协议、空白、畸形主机名仍拒绝', () => {
+    expect(normalizeWebsiteUrl('javascript:alert(1)')).toBeNull()
+    expect(normalizeWebsiteUrl('file:///C:/Windows')).toBeNull()
+    expect(normalizeWebsiteUrl('data:text/html,hi')).toBeNull()
+    expect(normalizeWebsiteUrl('https://||')).toBeNull()
+    expect(normalizeWebsiteUrl('   ')).toBeNull()
+  })
 })
 
 describe('deriveWebsiteName', () => {
