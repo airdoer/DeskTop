@@ -19,6 +19,7 @@ import {
   getDroppedFilePath,
   listQuickDirectories,
   MAX_QUICK_DIRECTORIES,
+  moveItem,
   openDirectory,
   pickDirectory,
   resolveDirectoryBadge,
@@ -27,6 +28,11 @@ import {
   statPath,
   type QuickDirectory,
 } from '@/services/quickDirectories'
+import {
+  readQuickDirsViewMode,
+  saveQuickDirsViewMode,
+  type QuickDirsViewMode,
+} from '@/services/uiPreferences'
 
 /*
  * QuickDirectoriesPanel — Business Feature：管理最多 MAX_QUICK_DIRECTORIES 个
@@ -34,29 +40,30 @@ import {
  * 依据 docs/UI_DESIGN_SYSTEM.md §25/§26，shell.openPath / dialog / webUtils 经 IPC Service；
  * §21 Empty State 清晰、可操作；§11.1 操作反馈用 Toast。
  *
- * 三项能力：
+ * 四项能力：
  *   1. 拖拽解析：从资源管理器拖入文件夹即可解析绝对路径并添加（path:stat 校验目录）。
- *   2. 标识徽标：文件夹图标替换为可选颜色徽标，最多 2 个字母，缺省按名称派生。
+ *   2. 标识徽标：文件夹图标替换为可选颜色徽标，最多 2 个字符（保留用户输入的大小写），
+ *      缺省按名称派生。
  *   3. 颜色圆点：列表/卡片视图均展示标识色圆点。
+ *   4. 拖动排序：列表/卡片均可拖动条目调整顺序，顺序随业务数据一同落盘。
  *
  * 支持两种视图模式：
- *   - list: 紧凑横向列表，适合信息密度优先（§7 Compact Desktop Density）
+ *   - list: 紧凑横向列表，适合信息密度优先（§7 Compact Desktop Density），行间用斑马纹区分
  *   - card: 卡片网格，适合视觉分组与可扫描性
- * 视图偏好为 UI 状态，使用 localStorage 持久化（非业务数据）。
+ * 视图偏好经 uiPreferences Service 持久化到 Main Process（不用 localStorage：
+ * 生产构建以 file:// 加载，localStorage 不保证持久化）。
+ *
+ * 两类拖拽如何区分：外部拖入的是文件（dataTransfer.types 含 'Files'），
+ * 内部排序拖的是条目（自定义 MIME REORDER_MIME），两者互不影响。
  */
 
-type ViewMode = 'list' | 'card'
+type ViewMode = QuickDirsViewMode
 
-const VIEW_STORAGE_KEY = 'c7-desktop.quick-dirs.view'
+/** 内部排序拖拽的私有 MIME：与系统文件拖入区分（types 在 dragover 阶段可读，getData 不可读） */
+const REORDER_MIME = 'application/x-c7-quick-dir-id'
 
-function readViewMode(): ViewMode {
-  try {
-    const v = localStorage.getItem(VIEW_STORAGE_KEY)
-    return v === 'card' || v === 'list' ? v : 'list'
-  } catch {
-    return 'list'
-  }
-}
+const isReorderDrag = (e: React.DragEvent) =>
+  Array.from(e.dataTransfer.types).includes(REORDER_MIME)
 
 function genId(): string {
   return `dir-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
@@ -67,7 +74,7 @@ export function QuickDirectoriesPanel() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [openingId, setOpeningId] = useState<string | null>(null)
-  const [view, setView] = useState<ViewMode>(readViewMode)
+  const [view, setView] = useState<ViewMode>('list')
 
   const [formOpen, setFormOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -78,16 +85,30 @@ export function QuickDirectoriesPanel() {
 
   const [dragActive, setDragActive] = useState(false)
   const [dropping, setDropping] = useState(false)
+  // 拖动排序：被拖条目 id + 插入位置（0..dirs.length，等于 length 表示末尾）
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
   // dragenter/dragleave 会在子元素间反复触发，用深度计数避免高亮闪烁
   const dragDepth = useRef(0)
 
+  // 视图偏好读取：异步来自 Main Process，首帧用默认值，读回后立即纠正
+  const [viewLoaded, setViewLoaded] = useState(false)
   useEffect(() => {
-    try {
-      localStorage.setItem(VIEW_STORAGE_KEY, view)
-    } catch {
-      /* ignore quota / disabled storage */
+    let alive = true
+    void readQuickDirsViewMode().then((mode) => {
+      if (!alive) return
+      setView(mode)
+      setViewLoaded(true)
+    })
+    return () => {
+      alive = false
     }
-  }, [view])
+  }, [])
+
+  useEffect(() => {
+    if (!viewLoaded) return
+    void saveQuickDirsViewMode(view)
+  }, [view, viewLoaded])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -168,6 +189,77 @@ export function QuickDirectoriesPanel() {
       setSaving(false)
     }
   }, [dirs])
+
+  /* ---------- 拖动排序 ---------- */
+
+  const clearReorder = useCallback(() => {
+    setDragId(null)
+    setDropIndex(null)
+  }, [])
+
+  const persistOrder = useCallback(async (next: QuickDirectory[]) => {
+    setDirs(next)
+    try {
+      await saveQuickDirectories(next)
+    } catch {
+      toast.error('排序保存失败')
+    }
+  }, [])
+
+  /** 落盘新顺序：to 为插入位置（0..length，length 表示末尾） */
+  const commitReorder = useCallback(
+    (to: number) => {
+      if (!dragId) return
+      const from = dirs.findIndex((d) => d.id === dragId)
+      clearReorder()
+      if (from < 0) return
+      const next = moveItem(dirs, from, to)
+      if (next.every((d, i) => d.id === dirs[i].id)) return
+      void persistOrder(next)
+    },
+    [clearReorder, dirs, dragId, persistOrder],
+  )
+
+  /** Alt + ↑/↓：拖放的键盘等价入口，保证无鼠标场景也能调整顺序 */
+  const moveByKeyboard = useCallback(
+    (id: string, delta: number) => {
+      const from = dirs.findIndex((d) => d.id === id)
+      if (from < 0) return
+      const to = delta > 0 ? from + delta + 1 : from + delta
+      if (to < 0 || to > dirs.length) return
+      void persistOrder(moveItem(dirs, from, to))
+    },
+    [dirs, persistOrder],
+  )
+
+  /** 由条目落点（上/下半区）推导插入位置；卡片网格按左右半区判断 */
+  const insertIndexAt = (index: number, e: React.DragEvent<HTMLElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const after =
+      view === 'card'
+        ? e.clientX > rect.left + rect.width / 2
+        : e.clientY > rect.top + rect.height / 2
+    return after ? index + 1 : index
+  }
+
+  const reorder: ReorderProps = {
+    draggingId: dragId,
+    onDragStart: (id) => setDragId(id),
+    onDragEnd: clearReorder,
+    onDragOverRow: (index, e) => {
+      if (!dragId) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setDropIndex(insertIndexAt(index, e))
+    },
+    onDropRow: (index, e) => {
+      if (!dragId) return
+      e.preventDefault()
+      e.stopPropagation()
+      commitReorder(insertIndexAt(index, e))
+    },
+    onMove: moveByKeyboard,
+  }
 
   const openDir = useCallback(async (dir: QuickDirectory) => {
     setOpeningId(dir.id)
@@ -256,6 +348,11 @@ export function QuickDirectoriesPanel() {
       e.preventDefault()
       dragDepth.current = 0
       setDragActive(false)
+      // 条目排序拖拽落在空白处：直接结束，不当作文件解析（否则会误报"无法解析"）
+      if (isReorderDrag(e)) {
+        clearReorder()
+        return
+      }
       if (dropping) return
       const files = Array.from(e.dataTransfer.files ?? [])
       const paths = files
@@ -267,7 +364,7 @@ export function QuickDirectoriesPanel() {
       }
       await addPaths(paths)
     },
-    [addPaths, dropping],
+    [addPaths, clearReorder, dropping],
   )
 
   const atLimit = dirs.length >= MAX_QUICK_DIRECTORIES
@@ -276,7 +373,8 @@ export function QuickDirectoriesPanel() {
   return (
     <Panel
       title="常用目录"
-      description={`最多 ${MAX_QUICK_DIRECTORIES} 个目录，点击快速跳转，支持拖入文件夹添加`}
+      icon={<FolderIcon size={14} />}
+      help={`最多 ${MAX_QUICK_DIRECTORIES} 个目录，点击快速跳转；支持拖入文件夹添加、拖动条目排序（Alt+↑/↓）`}
       actions={
         <>
           <ViewModeToggle mode={view} onChange={setView} />
@@ -333,6 +431,8 @@ export function QuickDirectoriesPanel() {
                 <ListView
                   dirs={dirs}
                   openingId={openingId}
+                  reorder={reorder}
+                  dropIndex={dropIndex}
                   onOpen={openDir}
                   onEdit={openEdit}
                   onRemove={removeDir}
@@ -341,6 +441,8 @@ export function QuickDirectoriesPanel() {
                 <CardView
                   dirs={dirs}
                   openingId={openingId}
+                  reorder={reorder}
+                  dropIndex={dropIndex}
                   onOpen={openDir}
                   onEdit={openEdit}
                   onRemove={removeDir}
@@ -407,7 +509,8 @@ function ColorDot({ color, size = 8 }: { color: string; size?: number }) {
 
 /**
  * 目录徽标：替代原文件夹图标。
- * 背景为标识色，内容最多 2 个字母（缺省时按名称派生），无标识时回退为文件夹图形。
+ * 背景为标识色，内容最多 2 个字符（缺省时按名称派生，派生结果默认大写），
+ * 用户手填时保留原始大小写；无标识时回退为文件夹图形。
  */
 function DirBadge({ dir, size = 22 }: { dir: QuickDirectory; size?: number }) {
   const color = resolveDirectoryColor(dir)
@@ -417,29 +520,61 @@ function DirBadge({ dir, size = 22 }: { dir: QuickDirectory; size?: number }) {
     <span
       className="flex items-center justify-center rounded-md shrink-0 select-none text-white font-medium leading-none"
       style={{ width: size, height: size, backgroundColor: color, fontSize }}
-      title={badge ? `${dir.name}（${badge.toUpperCase()}）` : dir.name}
+      title={badge ? `${dir.name}（${badge}）` : dir.name}
       aria-hidden
     >
-      {badge ? badge.toUpperCase() : <FolderIcon size={Math.round(size * 0.58)} />}
+      {badge ? badge : <FolderIcon size={Math.round(size * 0.58)} />}
     </span>
   )
+}
+
+/** 拖动排序所需的回调集合，由面板持有状态、下发给列表/卡片条目 */
+interface ReorderProps {
+  draggingId: string | null
+  onDragStart: (id: string) => void
+  onDragEnd: () => void
+  onDragOverRow: (index: number, e: React.DragEvent<HTMLElement>) => void
+  onDropRow: (index: number, e: React.DragEvent<HTMLElement>) => void
+  onMove: (id: string, delta: number) => void
+}
+
+/** 插入指示线的位置：top = 落在该条目之前，bottom = 之后 */
+type DropEdge = 'top' | 'bottom' | null
+
+const DROP_EDGE_CLASS: Record<'top' | 'bottom', string> = {
+  top: 'shadow-[inset_0_2px_0_0_var(--color-primary)]',
+  bottom: 'shadow-[inset_0_-2px_0_0_var(--color-primary)]',
 }
 
 interface ViewCommonProps {
   dirs: QuickDirectory[]
   openingId: string | null
+  reorder: ReorderProps
+  dropIndex: number | null
   onOpen: (dir: QuickDirectory) => void
   onEdit: (dir: QuickDirectory) => void
   onRemove: (id: string) => void
 }
 
-function ListView({ dirs, openingId, onOpen, onEdit, onRemove }: ViewCommonProps) {
+function edgeAt(index: number, dropIndex: number | null, total: number): DropEdge {
+  if (dropIndex === null) return null
+  if (dropIndex === index) return 'top'
+  if (dropIndex === total && index === total - 1) return 'bottom'
+  return null
+}
+
+function ListView({ dirs, openingId, reorder, dropIndex, onOpen, onEdit, onRemove }: ViewCommonProps) {
   return (
-    <div className="flex flex-col gap-1">
-      {dirs.map((dir) => (
+    // 列表视图按表格处理：外框 + 斑马纹（奇数行底色），行间不留缝以便条纹连续
+    <div className="flex flex-col rounded-md border border-border-subtle overflow-hidden">
+      {dirs.map((dir, index) => (
         <DirRow
           key={dir.id}
           dir={dir}
+          index={index}
+          striped={index % 2 === 1}
+          dropEdge={edgeAt(index, dropIndex, dirs.length)}
+          reorder={reorder}
           opening={openingId === dir.id}
           onOpen={() => onOpen(dir)}
           onEdit={() => onEdit(dir)}
@@ -450,13 +585,16 @@ function ListView({ dirs, openingId, onOpen, onEdit, onRemove }: ViewCommonProps
   )
 }
 
-function CardView({ dirs, openingId, onOpen, onEdit, onRemove }: ViewCommonProps) {
+function CardView({ dirs, openingId, reorder, dropIndex, onOpen, onEdit, onRemove }: ViewCommonProps) {
   return (
     <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
-      {dirs.map((dir) => (
+      {dirs.map((dir, index) => (
         <DirCard
           key={dir.id}
           dir={dir}
+          index={index}
+          dropEdge={edgeAt(index, dropIndex, dirs.length)}
+          reorder={reorder}
           opening={openingId === dir.id}
           onOpen={() => onOpen(dir)}
           onEdit={() => onEdit(dir)}
@@ -502,6 +640,69 @@ function ColorSwatches({
           style={{ backgroundColor: c.value }}
         />
       ))}
+    </div>
+  )
+}
+
+/** 图标字母上限（与 electron/main/ipc.ts 的 MAX_BADGE_LENGTH 一致） */
+const MAX_BADGE_LENGTH = 2
+
+/**
+ * 图标字母输入：草稿态 + 显式确认。
+ * 输入过程中不做截断/派生（避免中文 IME 或长输入被打断），
+ * 点击"确认"或按 Enter 才提交；超过上限时不提交并给出提示。
+ */
+function BadgeField({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(value)
+
+  // 打开编辑/重置表单时，外部值变化需要同步回草稿
+  useEffect(() => {
+    setDraft(value)
+  }, [value])
+
+  const trimmed = draft.trim()
+  const tooLong = trimmed.length > MAX_BADGE_LENGTH
+  const dirty = trimmed !== value
+
+  const confirm = () => {
+    if (tooLong) {
+      toast.warning(`图标字母最多 ${MAX_BADGE_LENGTH} 个字符`)
+      return
+    }
+    onCommit(trimmed)
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs text-foreground-tertiary leading-4" htmlFor="dir-badge">
+        图标字母（最多 {MAX_BADGE_LENGTH} 个，支持小写）
+      </label>
+      <div className="flex items-center gap-1.5">
+        <AppInput
+          id="dir-badge"
+          block={false}
+          className="w-20"
+          placeholder="自动"
+          value={draft}
+          invalid={tooLong}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              confirm()
+            }
+          }}
+          aria-label="图标字母"
+        />
+        <AppButton variant="default" size="sm" onClick={confirm} disabled={!dirty} title="应用图标字母">
+          确认
+        </AppButton>
+      </div>
+      {tooLong && (
+        <span className="text-xs text-error leading-4">
+          最多 {MAX_BADGE_LENGTH} 个字符，当前 {trimmed.length} 个
+        </span>
+      )}
     </div>
   )
 }
@@ -575,23 +776,9 @@ function EditRow({
           title="图标预览"
           aria-hidden
         >
-          {previewBadge ? previewBadge.toUpperCase() : <FolderIcon size={16} />}
+          {previewBadge ? previewBadge : <FolderIcon size={16} />}
         </span>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-foreground-tertiary leading-4" htmlFor="dir-badge">
-            图标字母（最多 2 个）
-          </label>
-          <AppInput
-            id="dir-badge"
-            block={false}
-            className="w-20"
-            placeholder="自动"
-            value={formBadge}
-            maxLength={2}
-            onChange={(e) => onBadge(e.target.value.slice(0, 2))}
-            aria-label="图标字母"
-          />
-        </div>
+        <BadgeField value={formBadge} onCommit={onBadge} />
         <div className="flex flex-col gap-1">
           <span className="text-xs text-foreground-tertiary leading-4">图标颜色</span>
           <ColorSwatches value={formColor} onChange={onColor} />
@@ -611,30 +798,57 @@ function EditRow({
 
 function DirRow({
   dir,
+  index,
+  striped = false,
+  dropEdge = null,
+  reorder,
   opening,
   onOpen,
   onEdit,
   onRemove,
 }: {
   dir: QuickDirectory
+  index: number
+  /** 斑马纹：奇数行加深底色，仅在列表视图启用 */
+  striped?: boolean
+  dropEdge?: DropEdge
+  reorder: ReorderProps
   opening: boolean
   onOpen: () => void
   onEdit: () => void
   onRemove: () => void
 }) {
+  const dragging = reorder.draggingId === dir.id
   return (
     <div
       role="button"
       tabIndex={0}
+      draggable
       onClick={onOpen}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           onOpen()
         }
+        // Alt + ↑/↓ 是拖放的键盘等价操作
+        if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          e.preventDefault()
+          reorder.onMove(dir.id, e.key === 'ArrowUp' ? -1 : 1)
+        }
       }}
-      className="group flex items-center gap-2 h-10 px-2 rounded-md hover:bg-surface-hover focus:bg-surface-hover focus:outline-2 focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary cursor-pointer transition-colors"
-      title={`打开 ${dir.path}`}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(REORDER_MIME, dir.id)
+        e.dataTransfer.setData('text/plain', dir.id)
+        e.dataTransfer.effectAllowed = 'move'
+        reorder.onDragStart(dir.id)
+      }}
+      onDragEnd={reorder.onDragEnd}
+      onDragOver={(e) => reorder.onDragOverRow(index, e)}
+      onDrop={(e) => reorder.onDropRow(index, e)}
+      className={`group flex items-center gap-2 h-10 px-2.5 hover:bg-surface-hover focus:bg-surface-hover focus:outline-2 focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary cursor-pointer transition-colors ${
+        striped ? 'bg-surface-2' : 'bg-surface-1'
+      } ${dragging ? 'opacity-40' : ''} ${dropEdge ? DROP_EDGE_CLASS[dropEdge] : ''}`}
+      title={`打开 ${dir.path}（拖动可排序，Alt+↑/↓ 亦可）`}
     >
       <DirBadge dir={dir} size={22} />
       <div className="min-w-0 flex-1">
@@ -692,30 +906,53 @@ function DirRow({
 
 function DirCard({
   dir,
+  index,
+  dropEdge = null,
+  reorder,
   opening,
   onOpen,
   onEdit,
   onRemove,
 }: {
   dir: QuickDirectory
+  index: number
+  dropEdge?: DropEdge
+  reorder: ReorderProps
   opening: boolean
   onOpen: () => void
   onEdit: () => void
   onRemove: () => void
 }) {
+  const dragging = reorder.draggingId === dir.id
   return (
     <div
       role="button"
       tabIndex={0}
+      draggable
       onClick={onOpen}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           onOpen()
         }
+        if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          e.preventDefault()
+          reorder.onMove(dir.id, e.key === 'ArrowUp' ? -1 : 1)
+        }
       }}
-      className="group relative flex flex-col gap-1.5 p-3 rounded-md border border-border-subtle bg-surface-1 hover:border-primary hover:bg-surface-hover focus:outline-2 focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary cursor-pointer transition-colors"
-      title={`打开 ${dir.path}`}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(REORDER_MIME, dir.id)
+        e.dataTransfer.setData('text/plain', dir.id)
+        e.dataTransfer.effectAllowed = 'move'
+        reorder.onDragStart(dir.id)
+      }}
+      onDragEnd={reorder.onDragEnd}
+      onDragOver={(e) => reorder.onDragOverRow(index, e)}
+      onDrop={(e) => reorder.onDropRow(index, e)}
+      className={`group relative flex flex-col gap-1.5 p-3 rounded-md border border-border-subtle bg-surface-1 hover:border-primary hover:bg-surface-hover focus:outline-2 focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary cursor-pointer transition-colors ${
+        dragging ? 'opacity-40' : ''
+      } ${dropEdge ? DROP_EDGE_CLASS[dropEdge] : ''}`}
+      title={`打开 ${dir.path}（拖动可排序，Alt+↑/↓ 亦可）`}
     >
       <div className="flex items-start justify-between">
         <DirBadge dir={dir} size={26} />

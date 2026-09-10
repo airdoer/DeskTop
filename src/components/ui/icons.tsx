@@ -86,6 +86,15 @@ export function FolderOpenIcon(props: IconProps) {
   )
 }
 
+export function MonitorIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M12 16v4M9 20h6" />
+    </svg>
+  )
+}
+
 export function PlusIcon(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -163,6 +172,16 @@ export function ListIcon(props: IconProps) {
       <circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none" />
       <circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none" />
       <circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+export function HelpIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.8 9.6a2.3 2.3 0 1 1 3.1 2.1c-.6.3-.9.8-.9 1.5v.3" />
+      <circle cx="12" cy="17" r="0.85" fill="currentColor" stroke="none" />
     </svg>
   )
 }

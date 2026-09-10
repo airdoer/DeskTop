@@ -3,6 +3,7 @@ import {
   deriveDirectoryBadge,
   deriveDirectoryColor,
   DIRECTORY_COLORS,
+  moveItem,
   normalizeDirectoryBadge,
   normalizeDirectoryColor,
   resolveDirectoryBadge,
@@ -70,6 +71,46 @@ describe('deriveDirectoryColor', () => {
     for (const seed of ['a', 'dir-1', 'dir-2', 'C:\\Users\\demo']) {
       expect(values).toContain(deriveDirectoryColor(seed))
     }
+  })
+})
+
+describe('normalizeDirectoryBadge 大小写', () => {
+  it('保留用户输入的原始大小写（支持小写字母）', () => {
+    expect(normalizeDirectoryBadge('ab')).toBe('ab')
+    expect(normalizeDirectoryBadge('Ab')).toBe('Ab')
+    expect(normalizeDirectoryBadge('aB')).toBe('aB')
+  })
+})
+
+describe('moveItem（拖动排序）', () => {
+  const list = ['A', 'B', 'C', 'D']
+
+  it('下移一位：插入到目标项之后', () => {
+    expect(moveItem(list, 0, 2)).toEqual(['B', 'A', 'C', 'D'])
+  })
+
+  it('上移一位：插入到目标项之前', () => {
+    expect(moveItem(list, 2, 1)).toEqual(['A', 'C', 'B', 'D'])
+  })
+
+  it('移到末尾（to 等于长度）', () => {
+    expect(moveItem(list, 0, 4)).toEqual(['B', 'C', 'D', 'A'])
+  })
+
+  it('移到开头（to 为 0）', () => {
+    expect(moveItem(list, 3, 0)).toEqual(['D', 'A', 'B', 'C'])
+  })
+
+  it('落到自身位置或非法索引时保持原样', () => {
+    expect(moveItem(list, 1, 1)).toEqual(list)
+    expect(moveItem(list, 1, 2)).toEqual(list)
+    expect(moveItem(list, -1, 0)).toEqual(list)
+    expect(moveItem(list, 9, 0)).toEqual(list)
+  })
+
+  it('不修改原数组', () => {
+    moveItem(list, 0, 3)
+    expect(list).toEqual(['A', 'B', 'C', 'D'])
   })
 })
 

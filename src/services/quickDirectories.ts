@@ -78,6 +78,20 @@ export function resolveDirectoryBadge(dir: QuickDirectory): string {
   return normalizeDirectoryBadge(dir.badge) ?? deriveDirectoryBadge(dir.name || dir.path)
 }
 
+/**
+ * 列表重排（拖动排序用）：把 from 位置的项移动到「原数组中第 to 项之前」。
+ * to 取 0..length（等于 length 表示移到末尾）；from 非法时原样返回。
+ * 独立成纯函数便于单测覆盖（见 test/quick-directories.test.ts）。
+ */
+export function moveItem<T>(list: readonly T[], from: number, to: number): T[] {
+  const next = list.slice()
+  if (from < 0 || from >= next.length) return next
+  const [item] = next.splice(from, 1)
+  const target = Math.max(0, Math.min(to > from ? to - 1 : to, next.length))
+  next.splice(target, 0, item)
+  return next
+}
+
 export async function listQuickDirectories(): Promise<QuickDirectory[]> {
   const result = await window.ipcRenderer.invoke('quick-dirs:get')
   return (result as QuickDirectory[]) ?? []

@@ -45,8 +45,18 @@ const STORE_FILE = 'quick-directories.json'
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 const MAX_BADGE_LENGTH = 2
 
+/** UI 偏好（视图模式等）：与业务数据分开存放，见 UI_PREFS_FILE */
+const UI_PREFS_FILE = 'ui-preferences.json'
+const UI_PREF_MAX_KEYS = 50
+const UI_PREF_MAX_KEY_LENGTH = 64
+const UI_PREF_MAX_VALUE_LENGTH = 200
+
 function storePath(): string {
   return path.join(app.getPath('userData'), STORE_FILE)
+}
+
+function uiPrefsPath(): string {
+  return path.join(app.getPath('userData'), UI_PREFS_FILE)
 }
 
 async function readStore(): Promise<QuickDirsStore> {
@@ -63,6 +73,40 @@ async function readStore(): Promise<QuickDirsStore> {
 async function writeStore(store: QuickDirsStore): Promise<void> {
   await fs.mkdir(path.dirname(storePath()), { recursive: true })
   await fs.writeFile(storePath(), JSON.stringify(store, null, 2), 'utf-8')
+}
+
+export type UiPreferences = Record<string, string | number | boolean>
+
+/**
+ * 读取 UI 偏好。
+ * 说明：不用 renderer 的 localStorage —— 生产构建以 file:// 加载页面，
+ * 该 origin 下的 localStorage 不保证持久化，重启后视图偏好会丢失。
+ */
+async function readUiPrefs(): Promise<UiPreferences> {
+  try {
+    const raw = await fs.readFile(uiPrefsPath(), 'utf-8')
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const result: UiPreferences = {}
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        result[key] = value
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+async function writeUiPrefs(prefs: UiPreferences): Promise<void> {
+  await fs.mkdir(path.dirname(uiPrefsPath()), { recursive: true })
+  await fs.writeFile(uiPrefsPath(), JSON.stringify(prefs, null, 2), 'utf-8')
+}
+
+/** 只接受标量，避免函数/大对象/循环引用进入持久化文件 */
+function isScalarPref(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
 }
 
 /*
@@ -271,6 +315,30 @@ export function registerIpcHandlers(): void {
     await writeStore({ directories: cleaned })
     return cleaned
   })
+
+  ipcMain.handle('ui-prefs:get', async (): Promise<UiPreferences> => readUiPrefs())
+
+  ipcMain.handle(
+    'ui-prefs:set',
+    async (_, patch: Record<string, unknown>): Promise<UiPreferences> => {
+      const current = await readUiPrefs()
+      const next: UiPreferences = { ...current }
+      for (const [key, value] of Object.entries(patch ?? {})) {
+        if (key.length === 0 || key.length > UI_PREF_MAX_KEY_LENGTH) continue
+        if (value === undefined || value === null) {
+          delete next[key]
+          continue
+        }
+        if (!isScalarPref(value)) continue
+        if (typeof value === 'string' && value.length > UI_PREF_MAX_VALUE_LENGTH) continue
+        // 键数量无界增长会让偏好文件膨胀，超限则不再接受新键
+        if (!(key in next) && Object.keys(next).length >= UI_PREF_MAX_KEYS) continue
+        next[key] = value
+      }
+      await writeUiPrefs(next)
+      return next
+    },
+  )
 
   /** 探测路径类型（拖拽落盘校验用）：只返回最小必要信息，不暴露目录内容 */
   ipcMain.handle('path:stat', async (_, targetPath: string): Promise<PathStat> => {

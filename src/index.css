@@ -30,6 +30,8 @@
   --color-surface-1: #ffffff;
   --color-surface-2: #fafafa;
   --color-surface-3: #f5f5f5;
+  /* 表头底色：比内容区（surface-1）深一档，用于 Panel header 等表头区域 */
+  --color-surface-header: #f5f5f5;
   --color-surface-sidebar: #fafafa;
   --color-surface-hover: #f5f5f5;
   --color-surface-active: #e6f4ff;

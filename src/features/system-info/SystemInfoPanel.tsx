@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Panel } from '@/components/layout/Panel'
 import { AppButton } from '@/components/ui/AppButton'
-import { CopyIcon, RefreshIcon } from '@/components/ui/icons'
+import { CopyIcon, MonitorIcon, RefreshIcon } from '@/components/ui/icons'
 import { toast } from '@/components/feedback/Toast'
 import { getSystemInfo, type SystemInfo } from '@/services/systemInfo'
 
@@ -48,7 +48,8 @@ export function SystemInfoPanel() {
   return (
     <Panel
       title="系统信息"
-      description="当前主机网络标识"
+      icon={<MonitorIcon size={14} />}
+      help="当前主机网络标识"
       actions={
         <AppButton
           variant="ghost"
@@ -67,9 +68,16 @@ export function SystemInfoPanel() {
       ) : error ? (
         <div className="text-xs text-error py-2">{error}</div>
       ) : info ? (
+        // 列表按表格处理：主行左右出血到 Panel 边缘并加斑马纹，附加 IP 行作为从属信息不加底色
         <div className="flex flex-col">
-          <InfoRow label="主机名" value={info.hostname} onCopy={() => copy(info.hostname, '主机名')} />
           <InfoRow
+            index={0}
+            label="主机名"
+            value={info.hostname}
+            onCopy={() => copy(info.hostname, '主机名')}
+          />
+          <InfoRow
+            index={1}
             label="IPv4"
             value={info.ipv4}
             onCopy={() => copy(info.ipv4, 'IPv4')}
@@ -82,7 +90,7 @@ export function SystemInfoPanel() {
           {others.length > 0 && (
             <div className="mt-1 pl-[92px] flex flex-col gap-0.5">
               {others.map((ip) => (
-                <InfoRow key={ip} label="" value={ip} onCopy={() => copy(ip, 'IPv4')} compact />
+                <InfoRow key={ip} index={0} label="" value={ip} onCopy={() => copy(ip, 'IPv4')} compact />
               ))}
             </div>
           )}
@@ -93,21 +101,29 @@ export function SystemInfoPanel() {
 }
 
 function InfoRow({
+  index,
   label,
   value,
   onCopy,
   extra,
   compact = false,
 }: {
+  /** 主行序号，用于斑马纹（从属行 compact 不参与） */
+  index: number
   label: string
   value: string
   onCopy: () => void
   extra?: ReactNode
   compact?: boolean
 }) {
+  const striped = !compact && index % 2 === 1
   return (
     <div
-      className={`grid items-center gap-2 ${compact ? 'grid-cols-[1fr_auto] h-7' : 'grid-cols-[80px_1fr_auto] h-8'}`}
+      className={`grid items-center gap-2 ${
+        compact
+          ? 'grid-cols-[1fr_auto] h-7'
+          : 'grid-cols-[80px_1fr_auto] h-8 -mx-3 px-3'
+      } ${striped ? 'bg-surface-2' : ''}`}
     >
       {label && <dt className="text-xs text-foreground-tertiary truncate">{label}</dt>}
       <dd className="min-w-0 text-[13px] text-foreground truncate font-mono">{value || '—'}</dd>
