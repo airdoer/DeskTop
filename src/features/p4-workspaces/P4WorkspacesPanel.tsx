@@ -967,7 +967,7 @@ function CardView({
             onDragEnd={reorder.onDragEnd}
             onDragOver={(e) => reorder.onDragOverRow(index, e)}
             onDrop={(e) => reorder.onDropRow(index, e)}
-            className={`group relative flex flex-col gap-1.5 p-3 rounded-md border border-border-subtle bg-surface-1 hover:border-primary hover:bg-surface-hover focus:outline-2 focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary cursor-pointer transition-colors ${
+            className={`group relative overflow-hidden flex flex-col gap-1.5 p-3 rounded-md border border-border-subtle bg-surface-1 hover:border-primary hover:bg-surface-hover focus:outline-2 focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary cursor-pointer transition-colors ${
               dragging ? 'opacity-40' : ''
             } ${edgeAt(index, dropIndex, workspaces.length) ? DROP_EDGE_CLASS[edgeAt(index, dropIndex, workspaces.length)!] : ''}`}
             title={`打开 ${ws.root}（拖动可排序，Alt+↑/↓ 亦可）`}
@@ -1010,6 +1010,26 @@ function CardView({
                 <span className="truncate">{ws.stream}</span>
               </div>
             )}
+            {/* 悬浮大方形按钮：仅在卡片视图、鼠标 hover 时显示，右下角铺底更显眼。
+              方形（宽高一致，只含 "P4V" 文字，上下左右居中），尺寸 64px 见方。
+              背景用 P4V 专属蓝（PERFORCE_BLUE），hover/active 沿用同色系深浅过渡。
+              data-no-open 阻止冒泡到卡片 onClick（打开目录），点击只触发 P4V 打开。
+              pointer-events 仅在 hover 时启用，避免遮挡卡片其余区域的点击。 */}
+            <AppButton
+              variant="primary"
+              size="md"
+              data-no-open
+              loading={openingP4VName === ws.name}
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenP4V(ws)
+              }}
+              className="!w-16 !h-16 !px-0 absolute bottom-2 right-2 z-10 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity !bg-[#42A2DC] hover:!bg-[#2E8FCC] active:!bg-[#1F7BB8]"
+              aria-label="在 P4V 中打开此工作区"
+              title="在 P4V 中打开此工作区"
+            >
+              <span className="text-[15px] font-bold leading-none tracking-wide">P4V</span>
+            </AppButton>
           </div>
         )
       })}
