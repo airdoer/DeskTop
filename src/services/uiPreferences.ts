@@ -21,28 +21,92 @@ export async function setUiPreferences(patch: UiPreferences): Promise<UiPreferen
   return (result as UiPreferences) ?? {}
 }
 
-/* ---------- 常用目录视图模式 ---------- */
+/* ---------- 视图模式偏好 ---------- */
 
-export type QuickDirsViewMode = 'list' | 'card'
+export type ViewMode = 'list' | 'card'
+/** 历史别名：常用目录视图模式，等价于 ViewMode */
+export type QuickDirsViewMode = ViewMode
 
 export const QUICK_DIRS_VIEW_KEY = 'quick-dirs.view'
+export const P4_WORKSPACES_VIEW_KEY = 'p4-workspaces.view'
+/** P4 工作区「仅看星标」筛选开关，标量 boolean，经 ui-prefs 持久化 */
+export const P4_WORKSPACES_STARRED_FILTER_KEY = 'p4-workspaces.starredFilter'
 
-export function normalizeViewMode(value: unknown): QuickDirsViewMode {
+export function normalizeViewMode(value: unknown): ViewMode {
   return value === 'card' ? 'card' : 'list'
 }
 
-export async function readQuickDirsViewMode(): Promise<QuickDirsViewMode> {
+/** 通用读取：任意面板的视图偏好都可复用 */
+export async function readViewMode(key: string): Promise<ViewMode> {
   try {
     const prefs = await getUiPreferences()
-    return normalizeViewMode(prefs[QUICK_DIRS_VIEW_KEY])
+    return normalizeViewMode(prefs[key])
   } catch {
     return 'list'
   }
 }
 
-export async function saveQuickDirsViewMode(mode: QuickDirsViewMode): Promise<void> {
+export async function saveViewMode(key: string, mode: ViewMode): Promise<void> {
   try {
-    await setUiPreferences({ [QUICK_DIRS_VIEW_KEY]: normalizeViewMode(mode) })
+    await setUiPreferences({ [key]: normalizeViewMode(mode) })
+  } catch {
+    /* 持久化失败不影响本次会话内的切换 */
+  }
+}
+
+export async function readQuickDirsViewMode(): Promise<QuickDirsViewMode> {
+  return readViewMode(QUICK_DIRS_VIEW_KEY)
+}
+
+export async function saveQuickDirsViewMode(mode: QuickDirsViewMode): Promise<void> {
+  return saveViewMode(QUICK_DIRS_VIEW_KEY, mode)
+}
+
+/* ---------- P4 工作区「仅看星标」筛选开关 ---------- */
+
+export async function readP4StarredFilter(): Promise<boolean> {
+  try {
+    const prefs = await getUiPreferences()
+    return prefs[P4_WORKSPACES_STARRED_FILTER_KEY] === true
+  } catch {
+    return false
+  }
+}
+
+export async function saveP4StarredFilter(value: boolean): Promise<void> {
+  try {
+    await setUiPreferences({ [P4_WORKSPACES_STARRED_FILTER_KEY]: value })
+  } catch {
+    /* 持久化失败不影响本次会话内的切换 */
+  }
+}
+
+/* ---------- 面板折叠状态 ---------- */
+
+/** 各面板的折叠状态 key：值 boolean（true=折叠） */
+export const PANEL_COLLAPSED_KEYS = {
+  systemInfo: 'panel.systemInfo.collapsed',
+  quickDirs: 'panel.quickDirs.collapsed',
+  p4Workspaces: 'panel.p4Workspaces.collapsed',
+  redmineIssues: 'panel.redmineIssues.collapsed',
+} as const
+
+export type PanelCollapsedKey = (typeof PANEL_COLLAPSED_KEYS)[keyof typeof PANEL_COLLAPSED_KEYS]
+
+/** 读取单个面板的折叠状态 */
+export async function readPanelCollapsed(key: PanelCollapsedKey): Promise<boolean> {
+  try {
+    const prefs = await getUiPreferences()
+    return prefs[key] === true
+  } catch {
+    return false
+  }
+}
+
+/** 写入单个面板的折叠状态 */
+export async function savePanelCollapsed(key: PanelCollapsedKey, value: boolean): Promise<void> {
+  try {
+    await setUiPreferences({ [key]: value })
   } catch {
     /* 持久化失败不影响本次会话内的切换 */
   }

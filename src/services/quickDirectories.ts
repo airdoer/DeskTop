@@ -4,6 +4,8 @@
  *   Electron API 禁止在 Renderer 直接调用，统一经 IPC Service 转发到 Main Process。
  */
 
+import { openPath } from './paths'
+
 export interface QuickDirectory {
   id: string
   name: string
@@ -102,9 +104,9 @@ export async function saveQuickDirectories(dirs: QuickDirectory[]): Promise<Quic
   return (result as QuickDirectory[]) ?? []
 }
 
+/** @deprecated 直接用通用 openPath：'quick-dirs:open' 已统一为 'path:open' */
 export async function openDirectory(targetPath: string): Promise<{ ok: boolean; error?: string }> {
-  const result = await window.ipcRenderer.invoke('quick-dirs:open', targetPath)
-  return result as { ok: boolean; error?: string }
+  return openPath(targetPath)
 }
 
 export async function pickDirectory(): Promise<{ name: string; path: string } | null> {

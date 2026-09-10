@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Panel } from '@/components/layout/Panel'
 import { AppButton } from '@/components/ui/AppButton'
-import { CopyIcon, MonitorIcon, RefreshIcon } from '@/components/ui/icons'
+import { CopyIcon, MonitorSolidIcon, RefreshIcon } from '@/components/ui/icons'
+import { WINDOWS_BLUE } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import { getSystemInfo, type SystemInfo } from '@/services/systemInfo'
+import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
+import { PANEL_COLLAPSED_KEYS } from '@/services/uiPreferences'
 
 /*
  * SystemInfoPanel — Business Feature：展示本机主机名与 IPv4.
@@ -15,6 +18,7 @@ export function SystemInfoPanel() {
   const [info, setInfo] = useState<SystemInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const { collapsed, toggle } = usePanelCollapsed(PANEL_COLLAPSED_KEYS.systemInfo)
 
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true)
@@ -48,8 +52,11 @@ export function SystemInfoPanel() {
   return (
     <Panel
       title="系统信息"
-      icon={<MonitorIcon size={14} />}
+      icon={<MonitorSolidIcon size={14} style={{ color: WINDOWS_BLUE }} />}
       help="当前主机网络标识"
+      collapsible
+      collapsed={collapsed}
+      onToggleCollapsed={toggle}
       actions={
         <AppButton
           variant="ghost"

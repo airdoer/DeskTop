@@ -2,15 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Panel } from '@/components/layout/Panel'
 import { AppButton } from '@/components/ui/AppButton'
 import { AppInput } from '@/components/ui/AppInput'
+import { ViewModeToggle } from '@/components/ui/ViewModeToggle'
 import {
   FolderIcon,
   FolderOpenIcon,
-  GridIcon,
-  ListIcon,
+  FolderSolidIcon,
   PencilIcon,
   PlusIcon,
   TrashIcon,
 } from '@/components/ui/icons'
+import { FOLDER_YELLOW } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import {
   deriveDirectoryBadge,
@@ -29,10 +30,12 @@ import {
   type QuickDirectory,
 } from '@/services/quickDirectories'
 import {
+  PANEL_COLLAPSED_KEYS,
   readQuickDirsViewMode,
   saveQuickDirsViewMode,
   type QuickDirsViewMode,
 } from '@/services/uiPreferences'
+import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
 
 /*
  * QuickDirectoriesPanel — Business Feature：管理最多 MAX_QUICK_DIRECTORIES 个
@@ -75,6 +78,7 @@ export function QuickDirectoriesPanel() {
   const [saving, setSaving] = useState(false)
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [view, setView] = useState<ViewMode>('list')
+  const { collapsed, toggle } = usePanelCollapsed(PANEL_COLLAPSED_KEYS.quickDirs)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -373,8 +377,11 @@ export function QuickDirectoriesPanel() {
   return (
     <Panel
       title="常用目录"
-      icon={<FolderIcon size={14} />}
+      icon={<FolderSolidIcon size={14} style={{ color: FOLDER_YELLOW }} />}
       help={`最多 ${MAX_QUICK_DIRECTORIES} 个目录，点击快速跳转；支持拖入文件夹添加、拖动条目排序（Alt+↑/↓）`}
+      collapsible
+      collapsed={collapsed}
+      onToggleCollapsed={toggle}
       actions={
         <>
           <ViewModeToggle mode={view} onChange={setView} />
@@ -460,39 +467,6 @@ export function QuickDirectoriesPanel() {
         )}
       </div>
     </Panel>
-  )
-}
-
-function ViewModeToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
-  const baseBtn =
-    'inline-flex items-center justify-center w-7 h-7 transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary'
-  const activeCls = 'bg-surface-3 text-primary'
-  const inactiveCls = 'text-foreground-tertiary hover:bg-surface-hover hover:text-foreground'
-  return (
-    <div
-      className="inline-flex items-center rounded-md border border-border overflow-hidden"
-      role="group"
-      aria-label="视图模式"
-    >
-      <button
-        type="button"
-        onClick={() => onChange('list')}
-        className={`${baseBtn} ${mode === 'list' ? activeCls : inactiveCls}`}
-        aria-pressed={mode === 'list'}
-        title="列表视图"
-      >
-        <ListIcon size={14} />
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange('card')}
-        className={`${baseBtn} ${mode === 'card' ? activeCls : inactiveCls}`}
-        aria-pressed={mode === 'card'}
-        title="卡片视图"
-      >
-        <GridIcon size={14} />
-      </button>
-    </div>
   )
 }
 

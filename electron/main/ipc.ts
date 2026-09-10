@@ -3,7 +3,16 @@ import os from 'node:os'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import {
+  buildP4VArgs,
+  normalizeFavoriteNames,
+  parseP4Set,
+  parseTaggedClients,
+  selectLocalWorkspaces,
+  type P4Workspace,
+} from './p4'
+import { fetchRedmineIssues } from './redmine'
 
 /*
  * IPC handlers for Desktop native capabilities.
@@ -35,6 +44,9 @@ export interface PathStat {
   isDirectory: boolean
 }
 
+/** Re-export 让 ipc.ts 的 handler 签名与 redmine.ts 的类型保持一致，避免循环依赖 */
+export type RedmineIssuesSnapshot = import('./redmine').RedmineIssuesSnapshot
+
 interface QuickDirsStore {
   directories: QuickDirectory[]
 }
@@ -51,12 +63,114 @@ const UI_PREF_MAX_KEYS = 50
 const UI_PREF_MAX_KEY_LENGTH = 64
 const UI_PREF_MAX_VALUE_LENGTH = 200
 
+/** P4 星标（收藏的 client 名列表） */
+const P4_FAVORITES_FILE = 'p4-favorites.json'
+
+/** P4 工作区自定义排序（client 名列表，与 favorites 同样净化） */
+const P4_WORKSPACE_ORDER_FILE = 'p4-workspace-order.json'
+
+/** P4 工作区徽标自定义（client 名 → {badge?, color?}，只读快照下的用户标注） */
+const P4_WORKSPACE_LABELS_FILE = 'p4-workspace-labels.json'
+
 function storePath(): string {
   return path.join(app.getPath('userData'), STORE_FILE)
 }
 
 function uiPrefsPath(): string {
   return path.join(app.getPath('userData'), UI_PREFS_FILE)
+}
+
+function p4FavoritesPath(): string {
+  return path.join(app.getPath('userData'), P4_FAVORITES_FILE)
+}
+
+function p4WorkspaceOrderPath(): string {
+  return path.join(app.getPath('userData'), P4_WORKSPACE_ORDER_FILE)
+}
+
+function p4WorkspaceLabelsPath(): string {
+  return path.join(app.getPath('userData'), P4_WORKSPACE_LABELS_FILE)
+}
+
+async function readP4Favorites(): Promise<string[]> {
+  try {
+    const raw = await fs.readFile(p4FavoritesPath(), 'utf-8')
+    return normalizeFavoriteNames((JSON.parse(raw) as { names?: unknown })?.names)
+  } catch {
+    return []
+  }
+}
+
+async function writeP4Favorites(names: string[]): Promise<void> {
+  await fs.mkdir(path.dirname(p4FavoritesPath()), { recursive: true })
+  await fs.writeFile(p4FavoritesPath(), JSON.stringify({ names }, null, 2), 'utf-8')
+}
+
+async function readP4WorkspaceOrder(): Promise<string[]> {
+  try {
+    const raw = await fs.readFile(p4WorkspaceOrderPath(), 'utf-8')
+    return normalizeFavoriteNames((JSON.parse(raw) as { names?: unknown })?.names)
+  } catch {
+    return []
+  }
+}
+
+async function writeP4WorkspaceOrder(names: string[]): Promise<void> {
+  await fs.mkdir(path.dirname(p4WorkspaceOrderPath()), { recursive: true })
+  await fs.writeFile(p4WorkspaceOrderPath(), JSON.stringify({ names }, null, 2), 'utf-8')
+}
+
+/**
+ * 净化单个 label：只保留合法 badge（≤2 字符）与 color（#rrggbb），
+ * 空对象返回 undefined，由调用方删除键，避免持久化无意义的空条目。
+ */
+function sanitizeLabel(raw: unknown): { badge?: string; color?: string } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const src = raw as { badge?: unknown; color?: unknown }
+  const badge =
+    typeof src.badge === 'string' ? src.badge.trim().slice(0, MAX_BADGE_LENGTH) : ''
+  const color =
+    typeof src.color === 'string' && HEX_COLOR.test(src.color.trim())
+      ? src.color.trim().toLowerCase()
+      : ''
+  const out: { badge?: string; color?: string } = {}
+  if (badge.length > 0) out.badge = badge
+  if (color.length > 0) out.color = color
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/**
+ * 净化 labels 映射：键用 normalizeFavoriteNames 同款规则截断长度，
+ * 值用 sanitizeLabel 过滤；键数量受 MAX_P4_FAVORITES 约束避免无界增长。
+ */
+function sanitizeLabelsMap(raw: unknown): Record<string, { badge?: string; color?: string }> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const result: Record<string, { badge?: string; color?: string }> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (Object.keys(result).length >= MAX_P4_FAVORITES) break
+    const name = key.trim().slice(0, MAX_CLIENT_NAME_LENGTH_FALLBACK)
+    if (!name) continue
+    const label = sanitizeLabel(value)
+    if (label) result[name] = label
+  }
+  return result
+}
+
+/** 与 p4.ts 的 MAX_CLIENT_NAME_LENGTH 保持一致的上限（此处仅用于键净化，不再 import 循环） */
+const MAX_CLIENT_NAME_LENGTH_FALLBACK = 128
+
+async function readP4WorkspaceLabels(): Promise<Record<string, { badge?: string; color?: string }>> {
+  try {
+    const raw = await fs.readFile(p4WorkspaceLabelsPath(), 'utf-8')
+    return sanitizeLabelsMap(JSON.parse(raw))
+  } catch {
+    return {}
+  }
+}
+
+async function writeP4WorkspaceLabels(labels: Record<string, { badge?: string; color?: string }>): Promise<void> {
+  await fs.mkdir(path.dirname(p4WorkspaceLabelsPath()), { recursive: true })
+  await fs.writeFile(p4WorkspaceLabelsPath(), JSON.stringify(labels, null, 2), 'utf-8')
 }
 
 async function readStore(): Promise<QuickDirsStore> {
@@ -107,6 +221,76 @@ async function writeUiPrefs(prefs: UiPreferences): Promise<void> {
 /** 只接受标量，避免函数/大对象/循环引用进入持久化文件 */
 function isScalarPref(value: unknown): value is string | number | boolean {
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+}
+
+/* ---------- P4 ---------- */
+
+export interface P4WorkspaceSnapshot {
+  available: boolean
+  /** P4PORT */
+  port?: string
+  user?: string
+  /** P4CLIENT：当前默认工作区 */
+  client?: string
+  /** P4CHARSET，打开 P4V 时透传（-C） */
+  charset?: string
+  workspaces: P4Workspace[]
+  /** 根目录不在本机的 client 数量（含 linux 路径 / 服务器临时 client） */
+  hiddenCount?: number
+  error?: string
+}
+
+const P4_SET_TIMEOUT_MS = 8000
+const P4_CLIENTS_TIMEOUT_MS = 20000
+
+/** 优先用安装目录下的绝对路径：Electron 从资源管理器启动时 PATH 可能尚未刷新 */
+function resolveP4Executable(): string | null {
+  const candidates: string[] = []
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+  candidates.push(path.join(programFiles, 'Perforce', 'p4.exe'))
+  const programFilesX86 = process.env['ProgramFiles(x86)']
+  if (programFilesX86) candidates.push(path.join(programFilesX86, 'Perforce', 'p4.exe'))
+  candidates.push('p4') // 兜底：依赖 PATH
+  return candidates.find((c) => c === 'p4' || existsSync(c)) ?? null
+}
+
+/** p4v.exe 与 p4 同目录安装（标准安装器布局） */
+function resolveP4VExecutable(): string | null {
+  const candidates: string[] = []
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+  candidates.push(path.join(programFiles, 'Perforce', 'p4v.exe'))
+  const programFilesX86 = process.env['ProgramFiles(x86)']
+  if (programFilesX86) candidates.push(path.join(programFilesX86, 'Perforce', 'p4v.exe'))
+  candidates.push('p4v') // 兜底：依赖 PATH
+  return candidates.find((c) => c === 'p4v' || existsSync(c)) ?? null
+}
+
+function runCommand(cmd: string, args: string[], timeout: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      cmd,
+      args,
+      { encoding: 'utf8', windowsHide: true, timeout, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const detail =
+            (typeof stderr === 'string' ? stderr : '').trim() ||
+            (typeof stdout === 'string' ? stdout : '').trim() ||
+            error.message
+          reject(new Error(detail))
+          return
+        }
+        resolve(typeof stdout === 'string' ? stdout : '')
+      },
+    )
+  })
+}
+
+/** p4 的错误输出常有多行（含 usage），UI 只展示首行 */
+function shortenP4Error(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  const first = raw.split(/\r?\n/).find((line) => line.trim().length > 0) ?? raw
+  return first.trim().slice(0, 200)
 }
 
 /*
@@ -355,7 +539,8 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('quick-dirs:open', async (_, targetPath: string): Promise<{ ok: boolean; error?: string }> => {
+  /** 通用「在资源管理器中打开路径」：常用目录与 P4 工作区共用 */
+  ipcMain.handle('path:open', async (_, targetPath: string): Promise<{ ok: boolean; error?: string }> => {
     if (!targetPath || typeof targetPath !== 'string') {
       return { ok: false, error: 'Invalid path' }
     }
@@ -370,6 +555,152 @@ export function registerIpcHandlers(): void {
     return { ok: true }
   })
 
+  /*
+   * P4 本地工作区：
+   *   1. p4 set        → P4PORT / P4USER / P4CLIENT（含注册表来源）
+   *   2. p4 -ztag clients -u <user> → 该用户名下所有 client 及其 Root / Stream
+   *   3. 只保留根目录在本机存在的工作区（即"本地"工作区）
+   * 任一步失败都返回 available=false + error，由 UI 展示降级提示，不抛异常。
+   */
+  ipcMain.handle('p4:workspaces', async (): Promise<P4WorkspaceSnapshot> => {
+    const p4 = resolveP4Executable()
+    if (!p4) {
+      return { available: false, workspaces: [], error: '未检测到 p4 命令行工具' }
+    }
+
+    let env: Record<string, string> = {}
+    try {
+      env = parseP4Set(await runCommand(p4, ['set'], P4_SET_TIMEOUT_MS))
+    } catch {
+      /* p4 set 失败不影响后续，env 留空即可 */
+    }
+
+    const user = env.P4USER ?? ''
+    const args = user ? ['-ztag', 'clients', '-u', user] : ['-ztag', 'clients']
+
+    let output: string
+    try {
+      output = await runCommand(p4, args, P4_CLIENTS_TIMEOUT_MS)
+    } catch (e) {
+      return {
+        available: false,
+        workspaces: [],
+        port: env.P4PORT,
+        user: user || undefined,
+        client: env.P4CLIENT,
+        error: shortenP4Error(e),
+      }
+    }
+
+    const records = parseTaggedClients(output)
+    if (records.length === 0) {
+      return {
+        available: false,
+        workspaces: [],
+        port: env.P4PORT,
+        user: user || undefined,
+        client: env.P4CLIENT,
+        error: output.trim().split(/\r?\n/)[0]?.slice(0, 200) || '未能解析 p4 clients 输出',
+      }
+    }
+
+    const { workspaces, hiddenCount } = selectLocalWorkspaces(records, (target) => {
+      try {
+        return existsSync(target)
+      } catch {
+        return false
+      }
+    })
+
+    return {
+      available: true,
+      port: env.P4PORT,
+      user: user || undefined,
+      client: env.P4CLIENT,
+      charset: env.P4CHARSET,
+      workspaces,
+      hiddenCount,
+    }
+  })
+
+  /* P4 星标（收藏）：按 client 名存取，净化在 normalizeFavoriteNames 内完成 */
+  ipcMain.handle('p4-favorites:get', async (): Promise<string[]> => readP4Favorites())
+
+  ipcMain.handle('p4-favorites:set', async (_, names: unknown): Promise<string[]> => {
+    const cleaned = normalizeFavoriteNames(names)
+    await writeP4Favorites(cleaned)
+    return cleaned
+  })
+
+  /*
+   * P4 工作区自定义排序：存一份用户拖动后的 client 名顺序列表。
+   * 渲染层读取后，按此列表重排快照结果，未列入的按默认名称序追加在后。
+   * 与 favorites 同样用 normalizeFavoriteNames 净化（去重 / 限量 / 长度截断）。
+   */
+  ipcMain.handle('p4-workspace-order:get', async (): Promise<string[]> => readP4WorkspaceOrder())
+
+  ipcMain.handle(
+    'p4-workspace-order:set',
+    async (_, names: unknown): Promise<string[]> => {
+      const cleaned = normalizeFavoriteNames(names)
+      await writeP4WorkspaceOrder(cleaned)
+      return cleaned
+    },
+  )
+
+  /*
+   * P4 工作区徽标自定义：client 名 → {badge?, color?}。
+   * 渲染层把用户为某 client 设置的徽标文字/颜色存到这里，只读快照不变，
+   * 渲染时按 client 名查表覆盖派生值。空 label 由主进程删除键，避免空条目膨胀。
+   */
+  ipcMain.handle(
+    'p4-workspace-labels:get',
+    async (): Promise<Record<string, { badge?: string; color?: string }>> =>
+      readP4WorkspaceLabels(),
+  )
+
+  ipcMain.handle(
+    'p4-workspace-labels:set',
+    async (
+      _,
+      labels: unknown,
+    ): Promise<Record<string, { badge?: string; color?: string }>> => {
+      const cleaned = sanitizeLabelsMap(labels)
+      await writeP4WorkspaceLabels(cleaned)
+      return cleaned
+    },
+  )
+
+  /*
+   * 在 P4V 中打开指定 workspace：
+   *   p4v.exe -p4vc [-p port] [-u user] [-c client] [-C charset] workspacewindow
+   * workspacewindow 会为该连接打开工作区窗口，已打开则带到前台（见 p4vc help）。
+   * 连接参数由 Renderer 从快照透传；p4v 是常驻 GUI 进程，detached 启动后立即返回。
+   */
+  ipcMain.handle(
+    'p4:open-p4v',
+    async (
+      _,
+      payload: { client: string; port?: string; user?: string; charset?: string },
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const client = typeof payload?.client === 'string' ? payload.client.trim() : ''
+      if (!client) return { ok: false, error: '缺少 client 名' }
+      const p4v = resolveP4VExecutable()
+      if (!p4v) return { ok: false, error: '未检测到 p4v（P4 图形客户端）' }
+      try {
+        const args = buildP4VArgs(
+          { port: payload?.port, user: payload?.user, charset: payload?.charset },
+          client,
+        )
+        const child = spawn(p4v, args, { detached: true, stdio: 'ignore', windowsHide: true })
+        child.unref()
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: shortenP4Error(e) }
+      }
+    },
+  )
+
   ipcMain.handle('quick-dirs:pick', async (): Promise<{ name: string; path: string } | null> => {
     // Open a directory picker via a native dialog (deferred import to keep startup light)
     const { dialog } = await import('electron')
@@ -380,4 +711,16 @@ export function registerIpcHandlers(): void {
     const picked = result.filePaths[0]
     return { name: path.basename(picked), path: picked }
   })
+
+  /*
+   * Redmine 单子查询：按用户名查询当前进行中、且目标版本 != 223 的单子。
+   * 实现见 electron/main/redmine.ts（API Key 只存在于主进程）。
+   * 渲染层通过 redmineIssues Service 调用，禁止直接 fetch 外网。
+   */
+  ipcMain.handle(
+    'redmine:issues',
+    async (_, userName?: string): Promise<RedmineIssuesSnapshot> => {
+      return fetchRedmineIssues(userName ?? '')
+    },
+  )
 }

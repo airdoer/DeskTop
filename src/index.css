@@ -30,10 +30,11 @@
   --color-surface-1: #ffffff;
   --color-surface-2: #fafafa;
   --color-surface-3: #f5f5f5;
-  /* 表头底色：比内容区（surface-1）深一档，用于 Panel header 等表头区域 */
-  --color-surface-header: #f5f5f5;
+  /* 表头底色：与内容区 surface-1（#fff）拉开明显对比，参考 Ant Design / VS Code panel header；
+     取 #f0f0f2（冷调浅灰），配底边 border（#d9d9d9）形成清晰分层，避免 #f5f5f5 与白色几乎无区分 */
+  --color-surface-header: #f0f0f2;
   --color-surface-sidebar: #fafafa;
-  --color-surface-hover: #f5f5f5;
+  --color-surface-hover: #f0f0f2;
   --color-surface-active: #e6f4ff;
 
   /* Border */
