@@ -36,23 +36,46 @@ const MAX_URL_LENGTH = 2048
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 
+/** 形如 https:// 或 http:// —— 只有出现 :// 才认定"已带协议" */
+const HAS_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
+
 /**
- * 链接规范化：补全协议并限定 http/https，防止 javascript: 等危险协议进入持久化数据。
- * 与 src/services/websites.ts 的 normalizeWebsiteUrl 等价（主进程无法反向 import 渲染层）。
+ * 链接输入的字符归一化：全角标点折算为半角，并清除粘贴常带的零宽字符。
+ * 中文输入法下 https：//www.baidu.com/ 这类输入若不折算，new URL() 会直接抛 Invalid URL，
+ * 用户就会看到"明明是正常链接却提示无效"。
+ * 与 src/services/websites.ts 的 normalizeUrlInput 等价，改必须同步。
  */
-export function normalizeWebsiteUrl(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null
-  const value = raw.trim()
-  if (!value || value.length > MAX_URL_LENGTH) return null
-  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value) ? value : `https://${value}`
+function normalizeUrlInput(raw: string): string {
+  return (raw ?? '')
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/\u3002/g, '.')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim()
+    .replace(/^(https?):\/{0,2}/i, '$1://')
+}
+
+function parseHttpUrl(candidate: string): string | null {
   try {
-    const url = new URL(withScheme)
+    const url = new URL(candidate)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
     if (!url.hostname) return null
     return url.toString()
   } catch {
     return null
   }
+}
+
+/**
+ * 链接规范化：补全协议并限定 http/https，防止 javascript: 等危险协议进入持久化数据。
+ * 与 src/services/websites.ts 的 normalizeWebsiteUrl 等价（主进程无法反向 import 渲染层），
+ * 改逻辑必须同步，并在 test/websites.test.ts 中同时断言两侧结果一致。
+ */
+export function normalizeWebsiteUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const value = normalizeUrlInput(raw)
+  if (!value || value.length > MAX_URL_LENGTH) return null
+  if (HAS_SCHEME.test(value)) return parseHttpUrl(value)
+  return parseHttpUrl(`https://${value}`) ?? parseHttpUrl(value)
 }
 
 /** id 列表净化：去空白、去重、限量、限长 */

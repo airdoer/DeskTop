@@ -47,23 +47,52 @@ export const MAX_BADGE_LENGTH = 2
 
 export const EMPTY_WEBSITE_CONFIG: WebsiteConfig = { order: [], hidden: [], custom: [] }
 
+/** 形如 https:// 或 http:// —— 只有出现 :// 才认定"已带协议" */
+const HAS_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
+
 /**
- * 链接规范化：补全协议、限定 http/https。
- * 非法或空白返回 null（由调用方提示），避免 javascript: 等协议进入持久化数据。
- * 说明：electron/main/websites.ts 有一份等价实现（主进程不允许反向 import 渲染层）。
+ * 链接输入的字符归一化。
+ * 中文输入法下 : / ? = 常被输出为全角 ：／？＝，而 WHATWG URL 把全角冒号视作非法主机
+ * 字符，new URL() 会直接抛 Invalid URL —— 表现为"明明填的是正常链接却提示无效"。
+ * 因此在解析前先把全角字符折算为半角，并清掉粘贴常带的零宽字符与 BOM。
  */
-export function normalizeWebsiteUrl(raw: string): string | null {
-  const value = (raw ?? '').trim()
-  if (!value) return null
-  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value) ? value : `https://${value}`
+function normalizeUrlInput(raw: string): string {
+  return (raw ?? '')
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/\u3002/g, '.')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim()
+    .replace(/^(https?):\/{0,2}/i, '$1://')
+}
+
+function parseHttpUrl(candidate: string): string | null {
   try {
-    const url = new URL(withScheme)
+    const url = new URL(candidate)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
     if (!url.hostname) return null
     return url.toString()
   } catch {
     return null
   }
+}
+
+/**
+ * 链接规范化：补全协议、限定 http/https。
+ * 非法或空白返回 null（由调用方提示），避免 javascript: 等协议进入持久化数据。
+ *
+ * 两个曾导致误判的场景（见 normalizeUrlInput / HAS_SCHEME 注释）：
+ *   1. 中文输入法产生的全角标点，会让 https：//www.baidu.com/ 直接抛 Invalid URL；
+ *   2. localhost:8080 / 192.168.1.10:8080 这类内网地址，冒号前那段不是协议，
+ *      旧实现按「任意 scheme:」判定会把它当 localhost: 协议而拒绝。
+ *      现在仅在出现 :// 时才按原样判定，其余一律先补 https:// 再试。
+ * 说明：electron/main/websites.ts 有一份等价实现（主进程不允许反向 import 渲染层），
+ *   修改逻辑时两侧必须同步。
+ */
+export function normalizeWebsiteUrl(raw: string): string | null {
+  const value = normalizeUrlInput(raw)
+  if (!value) return null
+  if (HAS_SCHEME.test(value)) return parseHttpUrl(value)
+  return parseHttpUrl(`https://${value}`) ?? parseHttpUrl(value)
 }
 
 /** 由链接派生默认名称：取主机名（去掉 www. 前缀），失败时回退完整链接 */

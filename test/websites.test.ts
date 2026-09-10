@@ -47,6 +47,67 @@ describe('normalizeWebsiteUrl', () => {
     expect(normalizeWebsiteUrl('')).toBeNull()
     expect(normalizeWebsiteUrl('   ')).toBeNull()
   })
+
+  /*
+   * 中文输入法把 : / 输出为全角 ：／ 时，WHATWG URL 视全角冒号为非法主机字符并抛
+   * Invalid URL，用户会遇到「填的是正常链接却提示无效」。这里折算为半角后应正常通过。
+   */
+  it('中文标点（全角冒号/斜杠/问号）自动折算为半角', () => {
+    expect(normalizeWebsiteUrl('https：//www.baidu.com/')).toBe('https://www.baidu.com/')
+    expect(normalizeWebsiteUrl('http：//www.baidu.com')).toBe('http://www.baidu.com/')
+    expect(normalizeWebsiteUrl('https:／／www.baidu.com/')).toBe('https://www.baidu.com/')
+    expect(normalizeWebsiteUrl('https://www.baidu.com/？wd=c7')).toBe(
+      'https://www.baidu.com/?wd=c7',
+    )
+    expect(normalizeWebsiteUrl('https://www。baidu.com/')).toBe('https://www.baidu.com/')
+  })
+
+  it('清除粘贴常带的零宽字符与 BOM', () => {
+    expect(normalizeWebsiteUrl('\uFEFFhttps://www.baidu.com/\u200B')).toBe(
+      'https://www.baidu.com/',
+    )
+  })
+
+  /*
+   * 内网地址带端口时，冒号前那段不是协议：旧实现按「scheme:」判定会把 localhost:
+   * 当成协议而拒绝，现在只在出现 :// 时才按原样判定。
+   */
+  it('内网 host:port 不再被误判为协议', () => {
+    expect(normalizeWebsiteUrl('localhost:8080')).toBe('https://localhost:8080/')
+    expect(normalizeWebsiteUrl('192.168.1.10:8080')).toBe('https://192.168.1.10:8080/')
+    expect(normalizeWebsiteUrl('http://192.168.1.10:8080/admin')).toBe(
+      'http://192.168.1.10:8080/admin',
+    )
+  })
+
+  // 危险协议不能被「补 https://」的兜底路径放行
+  it('危险协议在补协议兜底下仍被拒绝', () => {
+    expect(normalizeWebsiteUrl('JavaScript:alert(1)')).toBeNull()
+    expect(normalizeWebsiteUrl('data:text/html,<script>1</script>')).toBeNull()
+  })
+
+  // 渲染层与主进程两份实现必须行为一致，否则保存后会被主进程净化丢弃
+  it('渲染层与主进程实现结果一致', () => {
+    const samples = [
+      'https://www.baidu.com/',
+      'https：//www.baidu.com/',
+      'http://www.baidu.com',
+      'www.baidu.com',
+      'localhost:8080',
+      'javascript:alert(1)',
+      'file:///C:/Windows',
+      '',
+    ]
+    const fromRenderer = samples.map((s) => normalizeWebsiteUrl(s))
+    const fromMain = samples.map((s) => normalizeUrlMain(s))
+    expect(fromMain).toEqual(fromRenderer)
+  })
+
+  it('主进程实现同样折算全角标点', () => {
+    expect(normalizeUrlMain('https：//www.baidu.com/')).toBe('https://www.baidu.com/')
+    expect(normalizeUrlMain('localhost:8080')).toBe('https://localhost:8080/')
+    expect(normalizeUrlMain(123 as unknown as string)).toBeNull()
+  })
 })
 
 describe('deriveWebsiteName', () => {

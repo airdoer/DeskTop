@@ -804,10 +804,10 @@ function EditRow({
           value={formUrl}
           onChange={(e) => onUrl(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              onSave()
-            }
+            // 中文输入法用 Enter 确认候选词时不提交：此时输入尚未落到 state，会拿到空值误判无效
+            if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+            e.preventDefault()
+            onSave()
           }}
           className="flex-1 min-w-0"
           aria-label="网站链接"
