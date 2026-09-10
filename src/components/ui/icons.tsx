@@ -244,6 +244,42 @@ export function StarIcon(props: IconProps) {
   )
 }
 
+/**
+ * 地球/站点：用于「常用网站」导航项。
+ * 圆形轮廓 + 经线 + 纬线，语义对应内网站点集合。
+ */
+export function GlobeIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3.3 9.2h17.4M3.3 14.8h17.4" />
+      <path d="M12 3c2.4 2.6 3.7 5.7 3.7 9s-1.3 6.4-3.7 9c-2.4-2.6-3.7-5.7-3.7-9S9.6 5.6 12 3Z" />
+    </svg>
+  )
+}
+
+/** 眼睛：显示/可见，用于恢复被隐藏的站点 */
+export function EyeIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+/** 眼睛加斜线：隐藏，用于隐藏内置站点 */
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9.9 5.8A9 9 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.4 16.4 0 0 1-2.6 3.5" />
+      <path d="M6.4 7.8A15.8 15.8 0 0 0 2.5 12S6 18.5 12 18.5c1 0 2-.1 2.9-.4" />
+      <path d="M9.6 9.9a3 3 0 0 0 4.2 4.2" />
+      <path d="M4 4l16 16" />
+    </svg>
+  )
+}
+
 export function GridIcon(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -326,6 +362,30 @@ export function P4VWindowIcon(props: IconProps) {
       <circle cx="15.5" cy="11" r="1.8" fill="var(--color-surface-1, #fff)" />
       <path
         d="M10.5 14.5V12.5C10.5 11 11.5 10 13 10"
+        fill="none"
+        stroke="var(--color-surface-1, #fff)"
+        strokeWidth={1.3}
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+/**
+ * 实心地球：用于「常用网站」面板标题。
+ * 球体实心 + 经线/纬线以底色镂空（与 P4VWindowIcon 同一套「实心 + 底色反白」语言），
+ * 在 14px 小尺寸下仍可辨识。
+ */
+export function GlobeSolidIcon(props: IconProps) {
+  return (
+    <svg {...solidBase(props)}>
+      <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" />
+      <path
+        d="M12 3c2.4 2.6 3.7 5.7 3.7 9s-1.3 6.4-3.7 9c-2.4-2.6-3.7-5.7-3.7-9S9.6 5.6 12 3Z"
+        fill="var(--color-surface-1, #fff)"
+      />
+      <path
+        d="M3.4 9.2h17.2M3.4 14.8h17.2"
         fill="none"
         stroke="var(--color-surface-1, #fff)"
         strokeWidth={1.3}

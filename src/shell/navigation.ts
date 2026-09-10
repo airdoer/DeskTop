@@ -5,6 +5,7 @@ import {
   ToolsIcon,
   RefreshArrowIcon,
   FolderOpenIcon,
+  GlobeIcon,
   type IconProps,
 } from '@/components/ui/icons'
 
@@ -13,7 +14,7 @@ import {
  * 依据需求：主页 / 设置 / p4工具，p4工具 可展开二级（p4更新、p4merge 等）。
  */
 
-export type RouteId = 'home' | 'settings' | 'p4' | 'p4-update' | 'p4-merge'
+export type RouteId = 'home' | 'websites' | 'settings' | 'p4' | 'p4-update' | 'p4-merge'
 
 export interface NavLeaf {
   type: 'leaf'
@@ -40,6 +41,7 @@ export type NavItem = NavLeaf | NavGroup
 
 export const NAV_ITEMS: NavItem[] = [
   { type: 'leaf', id: 'home', label: '主页', icon: HomeIcon },
+  { type: 'leaf', id: 'websites', label: '常用网站', icon: GlobeIcon },
   { type: 'leaf', id: 'settings', label: '设置', icon: SettingsIcon },
   {
     type: 'group',

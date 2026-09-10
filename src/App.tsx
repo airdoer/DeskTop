@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { AppShell } from '@/shell/AppShell'
 import type { RouteId } from '@/shell/navigation'
 import { HomePage } from '@/pages/HomePage'
+import { WebsitesPage } from '@/pages/WebsitesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { P4UpdatePage } from '@/pages/p4/P4UpdatePage'
 import { P4MergePage } from '@/pages/p4/P4MergePage'
@@ -14,6 +15,7 @@ import { P4MergePage } from '@/pages/p4/P4MergePage'
 
 const pages: Partial<Record<RouteId, ReactNode>> = {
   home: <HomePage />,
+  websites: <WebsitesPage />,
   settings: <SettingsPage />,
   'p4-update': <P4UpdatePage />,
   'p4-merge': <P4MergePage />,

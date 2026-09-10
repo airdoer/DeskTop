@@ -12,7 +12,9 @@ import {
   selectLocalWorkspaces,
   type P4Workspace,
 } from './p4'
+import { sanitizeLabelsMap, type WorkspaceLabels } from './p4Labels'
 import { fetchRedmineIssues } from './redmine'
+import { normalizeWebsiteUrl, sanitizeWebsiteConfig, type WebsiteConfig } from './websites'
 
 /*
  * IPC handlers for Desktop native capabilities.
@@ -72,6 +74,9 @@ const P4_WORKSPACE_ORDER_FILE = 'p4-workspace-order.json'
 /** P4 工作区徽标自定义（client 名 → {badge?, color?}，只读快照下的用户标注） */
 const P4_WORKSPACE_LABELS_FILE = 'p4-workspace-labels.json'
 
+/** 常用网站的用户配置（显示顺序 / 隐藏的内置站点 / 自定义站点） */
+const WEBSITES_FILE = 'frequent-websites.json'
+
 function storePath(): string {
   return path.join(app.getPath('userData'), STORE_FILE)
 }
@@ -90,6 +95,24 @@ function p4WorkspaceOrderPath(): string {
 
 function p4WorkspaceLabelsPath(): string {
   return path.join(app.getPath('userData'), P4_WORKSPACE_LABELS_FILE)
+}
+
+function websitesPath(): string {
+  return path.join(app.getPath('userData'), WEBSITES_FILE)
+}
+
+async function readWebsitesConfig(): Promise<WebsiteConfig> {
+  try {
+    const raw = await fs.readFile(websitesPath(), 'utf-8')
+    return sanitizeWebsiteConfig(JSON.parse(raw))
+  } catch {
+    return { order: [], hidden: [], custom: [] }
+  }
+}
+
+async function writeWebsitesConfig(config: WebsiteConfig): Promise<void> {
+  await fs.mkdir(path.dirname(websitesPath()), { recursive: true })
+  await fs.writeFile(websitesPath(), JSON.stringify(config, null, 2), 'utf-8')
 }
 
 async function readP4Favorites(): Promise<string[]> {
@@ -121,45 +144,10 @@ async function writeP4WorkspaceOrder(names: string[]): Promise<void> {
 }
 
 /**
- * 净化单个 label：只保留合法 badge（≤2 字符）与 color（#rrggbb），
- * 空对象返回 undefined，由调用方删除键，避免持久化无意义的空条目。
+ * 净化单个 label 与 labels 映射的逻辑已抽到 ./p4Labels.ts（纯函数，便于单测）。
+ * 此处保留 HEX_COLOR / MAX_BADGE_LENGTH 仅供 quick-dirs:set 处理器净化徽标使用。
  */
-function sanitizeLabel(raw: unknown): { badge?: string; color?: string } | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const src = raw as { badge?: unknown; color?: unknown }
-  const badge =
-    typeof src.badge === 'string' ? src.badge.trim().slice(0, MAX_BADGE_LENGTH) : ''
-  const color =
-    typeof src.color === 'string' && HEX_COLOR.test(src.color.trim())
-      ? src.color.trim().toLowerCase()
-      : ''
-  const out: { badge?: string; color?: string } = {}
-  if (badge.length > 0) out.badge = badge
-  if (color.length > 0) out.color = color
-  return Object.keys(out).length > 0 ? out : undefined
-}
-
-/**
- * 净化 labels 映射：键用 normalizeFavoriteNames 同款规则截断长度，
- * 值用 sanitizeLabel 过滤；键数量受 MAX_P4_FAVORITES 约束避免无界增长。
- */
-function sanitizeLabelsMap(raw: unknown): Record<string, { badge?: string; color?: string }> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const result: Record<string, { badge?: string; color?: string }> = {}
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (Object.keys(result).length >= MAX_P4_FAVORITES) break
-    const name = key.trim().slice(0, MAX_CLIENT_NAME_LENGTH_FALLBACK)
-    if (!name) continue
-    const label = sanitizeLabel(value)
-    if (label) result[name] = label
-  }
-  return result
-}
-
-/** 与 p4.ts 的 MAX_CLIENT_NAME_LENGTH 保持一致的上限（此处仅用于键净化，不再 import 循环） */
-const MAX_CLIENT_NAME_LENGTH_FALLBACK = 128
-
-async function readP4WorkspaceLabels(): Promise<Record<string, { badge?: string; color?: string }>> {
+async function readP4WorkspaceLabels(): Promise<WorkspaceLabels> {
   try {
     const raw = await fs.readFile(p4WorkspaceLabelsPath(), 'utf-8')
     return sanitizeLabelsMap(JSON.parse(raw))
@@ -168,7 +156,7 @@ async function readP4WorkspaceLabels(): Promise<Record<string, { badge?: string;
   }
 }
 
-async function writeP4WorkspaceLabels(labels: Record<string, { badge?: string; color?: string }>): Promise<void> {
+async function writeP4WorkspaceLabels(labels: WorkspaceLabels): Promise<void> {
   await fs.mkdir(path.dirname(p4WorkspaceLabelsPath()), { recursive: true })
   await fs.writeFile(p4WorkspaceLabelsPath(), JSON.stringify(labels, null, 2), 'utf-8')
 }
@@ -524,6 +512,33 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  /*
+   * 常用网站：只持久化用户侧配置（顺序 / 隐藏 / 自定义站点），
+   * 内置站点清单在渲染层（src/features/websites/presets.ts），不进磁盘。
+   */
+  ipcMain.handle('websites:get', async (): Promise<WebsiteConfig> => readWebsitesConfig())
+
+  ipcMain.handle('websites:set', async (_, config: unknown): Promise<WebsiteConfig> => {
+    const cleaned = sanitizeWebsiteConfig(config)
+    await writeWebsitesConfig(cleaned)
+    return cleaned
+  })
+
+  /** 在系统默认浏览器中打开站点：只放行 http/https */
+  ipcMain.handle(
+    'web:open-external',
+    async (_, url: string): Promise<{ ok: boolean; error?: string }> => {
+      const normalized = normalizeWebsiteUrl(url)
+      if (!normalized) return { ok: false, error: '链接无效，仅支持 http/https' }
+      try {
+        await shell.openExternal(normalized)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
+  )
+
   /** 探测路径类型（拖拽落盘校验用）：只返回最小必要信息，不暴露目录内容 */
   ipcMain.handle('path:stat', async (_, targetPath: string): Promise<PathStat> => {
     if (!targetPath || typeof targetPath !== 'string') {
@@ -655,16 +670,12 @@ export function registerIpcHandlers(): void {
    */
   ipcMain.handle(
     'p4-workspace-labels:get',
-    async (): Promise<Record<string, { badge?: string; color?: string }>> =>
-      readP4WorkspaceLabels(),
+    async (): Promise<WorkspaceLabels> => readP4WorkspaceLabels(),
   )
 
   ipcMain.handle(
     'p4-workspace-labels:set',
-    async (
-      _,
-      labels: unknown,
-    ): Promise<Record<string, { badge?: string; color?: string }>> => {
+    async (_, labels: unknown): Promise<WorkspaceLabels> => {
       const cleaned = sanitizeLabelsMap(labels)
       await writeP4WorkspaceLabels(cleaned)
       return cleaned

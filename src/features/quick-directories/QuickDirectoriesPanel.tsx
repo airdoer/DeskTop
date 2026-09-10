@@ -3,6 +3,7 @@ import { Panel } from '@/components/layout/Panel'
 import { AppButton } from '@/components/ui/AppButton'
 import { AppInput } from '@/components/ui/AppInput'
 import { ViewModeToggle } from '@/components/ui/ViewModeToggle'
+import { ColorSwatches } from '@/components/ui/ColorSwatches'
 import {
   FolderIcon,
   FolderOpenIcon,
@@ -16,7 +17,6 @@ import { toast } from '@/components/feedback/Toast'
 import {
   deriveDirectoryBadge,
   deriveDirectoryColor,
-  DIRECTORY_COLORS,
   getDroppedFilePath,
   listQuickDirectories,
   MAX_QUICK_DIRECTORIES,
@@ -579,45 +579,6 @@ function CardView({ dirs, openingId, reorder, dropIndex, onOpen, onEdit, onRemov
   )
 }
 
-function ColorSwatches({
-  value,
-  onChange,
-}: {
-  value: string | null
-  onChange: (v: string | null) => void
-}) {
-  return (
-    <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="标识颜色">
-      <button
-        type="button"
-        onClick={() => onChange(null)}
-        aria-pressed={value === null}
-        title="自动（按目录名分配）"
-        className={`inline-flex items-center justify-center w-5 h-5 rounded-full border text-[9px] leading-none ${
-          value === null
-            ? 'border-primary text-primary ring-2 ring-primary/25'
-            : 'border-border text-foreground-tertiary hover:border-primary-hover'
-        }`}
-      >
-        A
-      </button>
-      {DIRECTORY_COLORS.map((c) => (
-        <button
-          key={c.value}
-          type="button"
-          onClick={() => onChange(c.value)}
-          aria-pressed={value === c.value}
-          title={`${c.label} ${c.value}`}
-          className={`w-5 h-5 rounded-full transition-transform focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary ${
-            value === c.value ? 'ring-2 ring-primary/40 scale-110' : 'hover:scale-110'
-          }`}
-          style={{ backgroundColor: c.value }}
-        />
-      ))}
-    </div>
-  )
-}
-
 /** 图标字母上限（与 electron/main/ipc.ts 的 MAX_BADGE_LENGTH 一致） */
 const MAX_BADGE_LENGTH = 2
 
@@ -755,7 +716,12 @@ function EditRow({
         <BadgeField value={formBadge} onCommit={onBadge} />
         <div className="flex flex-col gap-1">
           <span className="text-xs text-foreground-tertiary leading-4">图标颜色</span>
-          <ColorSwatches value={formColor} onChange={onColor} />
+          <ColorSwatches
+            value={formColor}
+            onChange={onColor}
+            label="目录标识颜色"
+            autoTitle="自动（按目录名分配）"
+          />
         </div>
       </div>
       <div className="flex justify-end gap-1.5">

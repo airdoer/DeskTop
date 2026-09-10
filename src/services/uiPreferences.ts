@@ -29,6 +29,8 @@ export type QuickDirsViewMode = ViewMode
 
 export const QUICK_DIRS_VIEW_KEY = 'quick-dirs.view'
 export const P4_WORKSPACES_VIEW_KEY = 'p4-workspaces.view'
+/** 常用网站视图模式 */
+export const WEBSITES_VIEW_KEY = 'websites.view'
 /** P4 工作区「仅看星标」筛选开关，标量 boolean，经 ui-prefs 持久化 */
 export const P4_WORKSPACES_STARRED_FILTER_KEY = 'p4-workspaces.starredFilter'
 

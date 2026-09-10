@@ -20,3 +20,6 @@ export const STAR_AMBER = '#F5A623'
 
 /** Redmine 品牌红：Redmine 官方 logo 主色 #E2001A，用于 Redmine 面板标题图标 */
 export const REDMINE_RED = '#E2001A'
+
+/** 站点蓝：用于「常用网站」面板标题图标（与色板的「蓝」同值，语义上代表链接/站点） */
+export const WEBSITE_BLUE = '#1677FF'

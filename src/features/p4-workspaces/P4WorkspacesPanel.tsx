@@ -3,6 +3,7 @@ import { Panel } from '@/components/layout/Panel'
 import { AppButton } from '@/components/ui/AppButton'
 import { AppInput } from '@/components/ui/AppInput'
 import { ViewModeToggle } from '@/components/ui/ViewModeToggle'
+import { ColorSwatches } from '@/components/ui/ColorSwatches'
 import {
   BranchIcon,
   CopyIcon,
@@ -17,7 +18,6 @@ import { PERFORCE_BLUE, STAR_AMBER } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import { openPath } from '@/services/paths'
 import {
-  DIRECTORY_COLORS,
   deriveDirectoryColor,
   moveItem,
 } from '@/services/quickDirectories'
@@ -358,17 +358,12 @@ export function P4WorkspacesPanel() {
     : ''
   const hiddenCount = snapshot?.hiddenCount ?? 0
 
-  // 问号气泡：隐藏的 client 数量从末行移到这里集中说明
+  // 问号气泡：仅说明面板能力，隐藏 client 数量改由 metaText 行右侧展示
   const help = (
-    <>
-      <div>
-        本机 Perforce 工作区（Root 存在于本机的 client）。点击行在资源管理器中打开，
-        星标可收藏常用工作区，拖动条目可自定义排序（Alt+↑/↓ 亦可），「P4V」按钮在 P4V 中打开对应 workspace。
-      </div>
-      {hiddenCount > 0 && (
-        <div className="mt-1">另有 {hiddenCount} 个 client 的 Root 不在本机，已隐藏。</div>
-      )}
-    </>
+    <div>
+      本机 Perforce 工作区（Root 存在于本机的 client）。点击行在资源管理器中打开，
+      星标可收藏常用工作区，拖动条目可自定义排序（Alt+↑/↓ 亦可），「P4V」按钮在 P4V 中打开对应 workspace。
+    </div>
   )
 
   const starredCount = workspaces.filter((ws) => favorites.has(ws.name)).length
@@ -444,6 +439,14 @@ export function P4WorkspacesPanel() {
               {filterStarred && (
                 <span className="shrink-0 text-foreground-secondary">
                   星标 {starredCount}/{snapshot.workspaces.length}
+                </span>
+              )}
+              {hiddenCount > 0 && (
+                <span
+                  className="shrink-0 text-foreground-tertiary"
+                  title={`另有 ${hiddenCount} 个 client 的 Root 不在本机，已隐藏`}
+                >
+                  隐藏 {hiddenCount}
                 </span>
               )}
             </div>
@@ -705,46 +708,6 @@ function RowActions({
 
 /* ---------- 徽标内联编辑浮层 ---------- */
 
-/** 颜色色板：与常用目录面板的 ColorSwatches 等价，复用 DIRECTORY_COLORS 色板 */
-function ColorSwatches({
-  value,
-  onChange,
-}: {
-  value: string | null
-  onChange: (v: string | null) => void
-}) {
-  return (
-    <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="徽标颜色">
-      <button
-        type="button"
-        onClick={() => onChange(null)}
-        aria-pressed={value === null}
-        title="自动（按 client 名派生）"
-        className={`inline-flex items-center justify-center w-5 h-5 rounded-full border text-[9px] leading-none ${
-          value === null
-            ? 'border-primary text-primary ring-2 ring-primary/25'
-            : 'border-border text-foreground-tertiary hover:border-primary-hover'
-        }`}
-      >
-        A
-      </button>
-      {DIRECTORY_COLORS.map((c) => (
-        <button
-          key={c.value}
-          type="button"
-          onClick={() => onChange(c.value)}
-          aria-pressed={value === c.value}
-          title={`${c.label} ${c.value}`}
-          className={`w-5 h-5 rounded-full transition-transform focus-visible:outline-2 focus-visible:-outline-offset-2 outline-primary ${
-            value === c.value ? 'ring-2 ring-primary/40 scale-110' : 'hover:scale-110'
-          }`}
-          style={{ backgroundColor: c.value }}
-        />
-      ))}
-    </div>
-  )
-}
-
 /**
  * 徽标内联编辑浮层：fixed 遮罩 + 居中弹窗，覆盖整个视口。
  * 与常用目录面板的 EditRow 不同：P4 是只读快照，只能改徽标（badge + color），
@@ -844,7 +807,12 @@ function LabelEditor({
         </div>
         <div className="flex flex-col gap-1">
           <span className="text-xs text-foreground-tertiary leading-4">图标颜色</span>
-          <ColorSwatches value={color} onChange={setColor} />
+          <ColorSwatches
+            value={color}
+            onChange={setColor}
+            label="徽标颜色"
+            autoTitle="自动（按 client 名派生）"
+          />
         </div>
         <div className="flex justify-end gap-1.5">
           <AppButton variant="ghost" onClick={onClose}>

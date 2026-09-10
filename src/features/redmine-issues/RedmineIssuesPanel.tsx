@@ -34,6 +34,12 @@ import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
  *   assigned_to 始终是当前用户，不单独占列，只在面板头摘要里回显。
  */
 
+/*
+ * 周版本展示顺序：当周 → 下周 → 下下周。getVersionWeekLabel 对更远/无日期版本返回 null，
+ * 这些分组不展示（用户只关心近三周）。null 值给一个大数确保排在末尾，但实际不会进入可见集合。
+ */
+const WEEK_ORDER: Record<string, number> = { 当周: 0, 下周: 1, 下下周: 2 }
+
 /** 排除掉的目标版本 id（与用户筛选 URL 一致） */
 const EXCLUDE_FIXED_VERSION_ID = 223
 /** 状态 id（7 = 进行中） */
@@ -63,9 +69,20 @@ export function RedmineIssuesPanel() {
     void load()
   }, [load])
 
-  const groups = snapshot ? groupIssuesByVersion(snapshot.issues) : []
+  const allGroups = snapshot ? groupIssuesByVersion(snapshot.issues) : []
+  // 只展示当周/下周/下下周三个周版本；更远的周与无日期/无版本分组不显示。
+  // 按周顺序排序（当周 → 下周 → 下下周），让近三周以稳定顺序呈现，而非按工时倒序。
+  const visibleGroups = allGroups
+    .filter((g) => getVersionWeekLabel(g.label) !== null)
+    .sort(
+      (a, b) =>
+        (WEEK_ORDER[getVersionWeekLabel(a.label) ?? ''] ?? 99) -
+        (WEEK_ORDER[getVersionWeekLabel(b.label) ?? ''] ?? 99),
+    )
+  const visibleIssueCount = visibleGroups.reduce((sum, g) => sum + g.issues.length, 0)
+  const hiddenIssueCount = snapshot ? snapshot.issues.length - visibleIssueCount : 0
   // 是否存在「当周」版本的分组：没有则提示「当周单子已完成 👍」
-  const hasCurrentWeek = groups.some((g) => getVersionWeekLabel(g.label) === '当周')
+  const hasCurrentWeek = visibleGroups.some((g) => getVersionWeekLabel(g.label) === '当周')
 
   return (
     <Panel
@@ -137,12 +154,22 @@ export function RedmineIssuesPanel() {
         />
       ) : snapshot ? (
         <div className="flex flex-col gap-3">
-          <div className="text-xs text-foreground-secondary">
-            共 <span className="font-medium text-foreground">{snapshot.totalCount}</span> 个单子
-            {snapshot.serverTotal !== undefined && snapshot.serverTotal > snapshot.totalCount ? (
-              <span className="text-foreground-tertiary">（服务端总计 {snapshot.serverTotal}，受 limit 约束）</span>
-            ) : null}
-            <span className="text-foreground-tertiary"> · 指派给 {snapshot.userName}</span>
+          <div className="flex items-center justify-between gap-2 text-xs text-foreground-secondary">
+            <div className="min-w-0 truncate">
+              共 <span className="font-medium text-foreground">{snapshot.totalCount}</span> 个单子
+              {snapshot.serverTotal !== undefined && snapshot.serverTotal > snapshot.totalCount ? (
+                <span className="text-foreground-tertiary">（服务端总计 {snapshot.serverTotal}，受 limit 约束）</span>
+              ) : null}
+              <span className="text-foreground-tertiary"> · 指派给 {snapshot.userName}</span>
+            </div>
+            {hiddenIssueCount > 0 && (
+              <span
+                className="shrink-0 text-foreground-tertiary"
+                title={`仅展示当周/下周/下下周，已隐藏 ${hiddenIssueCount} 个更远周版本的单子`}
+              >
+                已隐藏 {hiddenIssueCount} 个
+              </span>
+            )}
           </div>
           {!hasCurrentWeek && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700">
@@ -152,9 +179,15 @@ export function RedmineIssuesPanel() {
               <span className="text-[13px] font-medium">当周单子已完成</span>
             </div>
           )}
-          {groups.map((group) => (
-            <IssueGroup key={group.versionId ?? '__none'} group={group} />
-          ))}
+          {visibleGroups.length > 0 ? (
+            visibleGroups.map((group) => (
+              <IssueGroup key={group.versionId ?? '__none'} group={group} />
+            ))
+          ) : (
+            <div className="text-xs text-foreground-tertiary py-2">
+              当周/下周/下下周暂无单子
+            </div>
+          )}
         </div>
       ) : null}
     </Panel>
@@ -163,13 +196,26 @@ export function RedmineIssuesPanel() {
 
 function IssueGroup({ group }: { group: RedmineIssueGroup }) {
   const weekLabel = getVersionWeekLabel(group.label)
+  // 圆点颜色与右侧周标签的文字颜色保持一致：
+  //   当周 → primary 蓝；下周 → amber-700；下下周 → emerald-700；
+  //   无版本 → 中性灰。其他（更远的周已被面板过滤掉，不会进到这里）兜底用品牌红。
+  const dotColor =
+    group.versionId === null
+      ? '#9ca3af'
+      : weekLabel === '当周'
+        ? '#1677ff'
+        : weekLabel === '下周'
+          ? '#b45309'
+          : weekLabel === '下下周'
+            ? '#047857'
+            : REDMINE_RED
   return (
     <section className="rounded-md border border-border-subtle bg-surface-2/40 overflow-hidden">
       <header className="flex items-center justify-between gap-2 px-3 h-8 bg-surface-header border-b border-border-subtle">
         <div className="flex items-center gap-1.5 min-w-0">
           <span
             className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ backgroundColor: group.versionId === null ? '#9ca3af' : REDMINE_RED }}
+            style={{ backgroundColor: dotColor }}
             aria-hidden
           />
           <h3 className="text-[13px] font-medium text-foreground truncate">{group.label}</h3>
