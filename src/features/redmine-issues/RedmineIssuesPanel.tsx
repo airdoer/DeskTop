@@ -6,7 +6,6 @@ import { CopyIcon, ExternalLinkIcon, RefreshIcon, TicketSolidIcon } from '@/comp
 import { REDMINE_RED } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import {
-  DEFAULT_REDMINE_USER_NAME,
   buildCopyDescriptionText,
   getRedmineIssues,
   getVersionWeekLabel,
@@ -19,14 +18,19 @@ import {
 } from '@/services/redmineIssues'
 import { PANEL_COLLAPSED_KEYS } from '@/services/uiPreferences'
 import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
+import { useSsoSession } from '@/shell/ssoSessionContext'
 
 /*
- * RedmineIssuesPanel — Business Feature：展示当前用户的 Redmine 进行中单子.
+ * RedmineIssuesPanel — Business Feature：展示当前登录用户的 Redmine 进行中单子.
  * 依据 docs/UI_DESIGN_SYSTEM.md §25/§26，Redmine API 经 redmineIssues Service（IPC）调用；
  * §21 Empty State 清晰可操作；§11.1 操作反馈用 Toast；§20 用局部 loading。
  *
+ * 查询用户名来源：SSO 登录态（useSsoSession），不再硬编码 chenzhixu。
+ *   未登录时 AppShell 已用 LoginGate 拦截，本面板不会渲染；但为防御仍在 loggedIn/username
+ *   为空时不发起加载，避免无谓请求。
+ *
  * 过滤条件（与用户提供的筛选 URL 一致）：
- *   project=c7, status_id=7（进行中）, assigned_to_id=chenzhixu 的 user_id,
+ *   project=c7, status_id=7（进行中）, assigned_to_id=<登录用户的 user_id>,
  *   fixed_version_id != 223, sort=estimated_hours:desc,id:desc, group_by=fixed_version
  *
  * 布局：按 fixed_version 分组，每组一个标题 + 表格行列表。
@@ -46,14 +50,15 @@ const EXCLUDE_FIXED_VERSION_ID = 223
 const STATUS_ID = 7
 
 export function RedmineIssuesPanel() {
+  const { session, loggedIn } = useSsoSession()
+  const userName = session?.username ?? ''
   const [snapshot, setSnapshot] = useState<RedmineIssuesSnapshot | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
-  // 用户名：当前任务要求先用 chenzhixu，后续可扩展为可编辑
-  const [userName] = useState(DEFAULT_REDMINE_USER_NAME)
   const { collapsed, toggle } = usePanelCollapsed(PANEL_COLLAPSED_KEYS.redmineIssues)
 
   const load = useCallback(async () => {
+    if (!userName) return
     setLoading(true)
     setError(undefined)
     try {
@@ -66,8 +71,10 @@ export function RedmineIssuesPanel() {
   }, [userName])
 
   useEffect(() => {
+    // 未登录时不加载（AppShell 已拦截，这里为防御）
+    if (!loggedIn || !userName) return
     void load()
-  }, [load])
+  }, [load, loggedIn, userName])
 
   const allGroups = snapshot ? groupIssuesByVersion(snapshot.issues) : []
   // 只展示当周/下周/下下周三个周版本；更远的周与无日期/无版本分组不显示。
@@ -90,7 +97,7 @@ export function RedmineIssuesPanel() {
       icon={<TicketSolidIcon size={14} style={{ color: REDMINE_RED }} />}
       help={
         <div className="text-xs leading-5">
-          <div>过滤：chenzhixu · 状态=进行中 · 目标版本≠#{EXCLUDE_FIXED_VERSION_ID}</div>
+          <div>过滤：{userName || '未登录'} · 状态=进行中 · 目标版本≠#{EXCLUDE_FIXED_VERSION_ID}</div>
           <div>按目标版本分组，按预计工时倒序</div>
         </div>
       }
@@ -140,7 +147,7 @@ export function RedmineIssuesPanel() {
       ) : snapshot && snapshot.issues.length === 0 ? (
         <EmptyState
           title="当前没有符合条件的单子"
-          hint={`chenzhixu · 状态=进行中 · 目标版本≠#${EXCLUDE_FIXED_VERSION_ID}`}
+          hint={`${userName || '未登录'} · 状态=进行中 · 目标版本≠#${EXCLUDE_FIXED_VERSION_ID}`}
           action={
             <a
               href={REDMINE_FILTER_WEB_URL}

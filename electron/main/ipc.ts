@@ -1,4 +1,4 @@
-import { app, ipcMain, shell } from 'electron'
+import { app, ipcMain, shell, BrowserWindow } from 'electron'
 import os from 'node:os'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -27,6 +27,7 @@ import {
 } from './encoding'
 import { fetchRedmineIssues } from './redmine'
 import { normalizeWebsiteUrl, sanitizeWebsiteConfig, type WebsiteConfig } from './websites'
+import { startSsoLogin, readSsoSession, clearSsoSession, type SsoSession, type SsoResult } from './sso'
 
 /*
  * IPC handlers for Desktop native capabilities.
@@ -554,7 +555,7 @@ async function collectIpv4(): Promise<{ primary: string; list: string[] }> {
   return selectIpv4(os.networkInterfaces(), await getNicMeta())
 }
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): void {
   // 预热网卡元数据缓存，避免首次打开主页时等待 PowerShell 查询（约 1-2s）
   if (process.platform === 'win32') void getNicMeta()
 
@@ -919,4 +920,70 @@ export function registerIpcHandlers(): void {
       return fetchRedmineIssues(userName ?? '')
     },
   )
+
+  /* ---------- SSO 登录 ---------- */
+
+  /*
+   * 读取本地 SSO session（启动时回显已登录用户）.
+   * session 存于 userData/sso-session.json，主进程返回纯对象，渲染层只读不写。
+   */
+  ipcMain.handle('sso:get-session', async (): Promise<SsoSession | null> => readSsoSession())
+
+  /*
+   * 启动 SSO 登录流程.
+   * 主进程创建子 BrowserWindow 加载 SSO 登录页，拦截重定向拿 ticket，
+   * 调用 /cas/serviceValidate 校验，成功后持久化 session 并返回用户名。
+   * 失败/取消返回 success=false + error，由渲染层 Toast 提示。
+   */
+  ipcMain.handle('sso:login', async (): Promise<SsoResult> => {
+    try {
+      return await startSsoLogin(getMainWindow())
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e)
+      return { success: false, error }
+    }
+  })
+
+  /** 登出：清除本地 session，不调用 SSO 单点登出（客户端 APP 无需 SLO） */
+  ipcMain.handle('sso:logout', async (): Promise<{ ok: boolean }> => {
+    await clearSsoSession()
+    return { ok: true }
+  })
+
+  /* ---------- 自定义窗口控制按钮 ---------- */
+
+  /*
+   * 去掉原生 titleBarOverlay 后，最小化/最大化/关闭由渲染层自定义按钮触发，
+   * 通过 IPC 转发到主进程操作窗口。getMainWindow() 延迟取值，窗口未创建时静默忽略。
+   */
+  ipcMain.handle('window:minimize', async (): Promise<{ ok: boolean }> => {
+    const w = getMainWindow()
+    if (!w || w.isDestroyed()) return { ok: false }
+    w.minimize()
+    return { ok: true }
+  })
+
+  ipcMain.handle('window:toggle-maximize', async (): Promise<{ ok: boolean; maximized: boolean }> => {
+    const w = getMainWindow()
+    if (!w || w.isDestroyed()) return { ok: false, maximized: false }
+    if (w.isMaximized()) {
+      w.unmaximize()
+      return { ok: true, maximized: false }
+    }
+    w.maximize()
+    return { ok: true, maximized: true }
+  })
+
+  ipcMain.handle('window:close', async (): Promise<{ ok: boolean }> => {
+    const w = getMainWindow()
+    if (!w || w.isDestroyed()) return { ok: false }
+    w.close()
+    return { ok: true }
+  })
+
+  ipcMain.handle('window:is-maximized', async (): Promise<{ maximized: boolean }> => {
+    const w = getMainWindow()
+    if (!w || w.isDestroyed()) return { maximized: false }
+    return { maximized: w.isMaximized() }
+  })
 }

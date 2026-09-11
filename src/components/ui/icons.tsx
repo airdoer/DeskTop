@@ -442,3 +442,68 @@ export function TicketSolidIcon(props: IconProps) {
     </svg>
   )
 }
+
+/* ---------- 窗口控制 + 用户图标 ---------- */
+
+/**
+ * 用户头像/登录：圆形头部 + 弧形肩部，用于标题栏「登录用户」按钮.
+ * 线性图标，1.5px stroke，与 Icon System 默认风格一致。
+ */
+export function UserIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="8" r="3.5" />
+      <path d="M5 20a7 7 0 0 1 14 0" />
+    </svg>
+  )
+}
+
+/**
+ * 退出登录：矩形门框 + 向右箭头，用于「登录用户」下拉菜单的登出项.
+ * 与 ExternalLinkIcon 的箭头方向语言一致，区分「进入」与「离开」。
+ */
+export function LogoutIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+      <path d="M16 16 20 12 16 8" />
+      <path d="M20 12H9" />
+    </svg>
+  )
+}
+
+/**
+ * 最小化：一条水平线，对应 Windows 标题栏最小化按钮符号.
+ * 放在标题栏按钮区，使用 10px 小尺寸以与 36px 高度的按钮单元格视觉对齐。
+ */
+export function MinimizeIcon(props: IconProps) {
+  return (
+    <svg {...base({ strokeWidth: 1.8, ...props })}>
+      <path d="M5 12h14" />
+    </svg>
+  )
+}
+
+/**
+ * 最大化：方框外框，对应 Windows 标题栏最大化按钮符号.
+ */
+export function MaximizeIcon(props: IconProps) {
+  return (
+    <svg {...base({ strokeWidth: 1.5, ...props })}>
+      <rect x="5.5" y="5.5" width="13" height="13" rx="1" />
+    </svg>
+  )
+}
+
+/**
+ * 还原（最大化后）：两个错位方框，表示「从最大化还原」.
+ * 与 MaximizeIcon 互斥显示，由渲染层根据主窗口最大化状态切换。
+ */
+export function RestoreIcon(props: IconProps) {
+  return (
+    <svg {...base({ strokeWidth: 1.5, ...props })}>
+      <rect x="5" y="9" width="10" height="10" rx="1" />
+      <path d="M9 9V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2" />
+    </svg>
+  )
+}

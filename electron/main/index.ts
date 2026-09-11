@@ -53,10 +53,13 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 /**
- * 窗口控制按钮浮层高度（px）。
- * 渲染进程需要留出同等高度的顶部区域避让，见 src/shell/AppShell.tsx。
+ * 窗口控制按钮区高度契约（px）.
+ * 主进程去掉 titleBarOverlay 后窗口控制改为渲染层自定义，主进程不再直接使用此值；
+ * 渲染层标题栏高度必须与此保持一致，见 src/shell/TitleBar.tsx 的 TITLE_BAR_HEIGHT。
  */
-const TITLE_BAR_OVERLAY_HEIGHT = 36
+const TITLE_BAR_HEIGHT = 36
+// 契约常量保留导出，便于主进程未来若重新需要时直接引用
+export { TITLE_BAR_HEIGHT }
 
 let win: BrowserWindow | null = null
 const preload = path.join(__dirname, '../preload/index.mjs')
@@ -74,15 +77,11 @@ async function createWindow() {
     autoHideMenuBar: true,
     /*
      * 无标题栏：内容区直接顶到窗口顶部（full size content window）。
-     * Windows 下 hidden 必须配合 titleBarOverlay，否则连最小化/最大化/关闭按钮都没有。
-     * 浮层高度与 src/shell/AppShell.tsx 顶部拖拽区高度（TITLE_BAR_OVERLAY_HEIGHT）保持一致。
+     * 不使用 titleBarOverlay —— 改为在渲染层完全自定义窗口控制按钮
+     * （最小化 / 最大化 / 关闭）+ 登录用户按钮，置于右上角，视觉风格统一。
+     * 渲染层顶部拖拽区高度见 src/shell/AppShell.tsx 的 TITLE_BAR_HEIGHT。
      */
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#fafafa', // 与 surface-2 / 侧边栏底色一致，浮层视觉上不可见
-      symbolColor: '#595959',
-      height: TITLE_BAR_OVERLAY_HEIGHT,
-    },
     webPreferences: {
       preload,
       // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
@@ -113,6 +112,21 @@ async function createWindow() {
     return { action: 'deny' }
   })
 
+  /*
+   * 通知渲染层窗口最大化状态变化，用于自定义「最大化/还原」按钮图标切换.
+   * Electron 原生 titleBarOverlay 关闭后，最大化状态只能由主进程主动推送。
+   */
+  const notifyMaximized = () => {
+    if (win && !win.isDestroyed()) win.webContents.send('window:maximized-changed', true)
+  }
+  const notifyUnmaximized = () => {
+    if (win && !win.isDestroyed()) win.webContents.send('window:maximized-changed', false)
+  }
+  win.on('maximize', notifyMaximized)
+  win.on('unmaximize', notifyUnmaximized)
+  win.on('restore', notifyMaximized)
+  win.on('minimize', notifyUnmaximized)
+
   // Auto update
   update(win)
 }
@@ -121,7 +135,9 @@ app.whenReady().then(() => {
   // Remove the default application menu bar (per requirement: no menu bar).
   // The Sidebar inside the renderer provides primary navigation instead.
   Menu.setApplicationMenu(null)
-  registerIpcHandlers()
+  // 传入主窗口 getter：IPC handlers 在注册时主窗口尚未创建，
+  // 通过 getter 延迟到调用时再拿，窗口控制 / SSO 登录父窗口都依赖它。
+  registerIpcHandlers(() => win)
   createWindow()
 })
 
