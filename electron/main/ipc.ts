@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import {
   buildP4VArgs,
+  buildWindowsBatchCommand,
   normalizeFavoriteNames,
   parseP4Set,
   parseTaggedClients,
@@ -302,27 +303,24 @@ function resolveP4VCLauncher(): string | null {
 
 /**
  * 启动常驻 GUI 进程（不等待退出）。
- * .bat / .cmd 不能由 Node 直接执行，必须经 cmd.exe 包装，且参数要自行加引号
- * （windowsVerbatimArguments 下 Node 不再替我们转义）。
+ * .bat / .cmd 不能由 Node 直接执行，必须经 cmd.exe 包装；
+ * 包装方式见 buildWindowsBatchCommand（整条命令再包一层引号，避免 /s 剥引号导致路径被空格切断）。
  */
 function spawnDetached(target: string, args: string[]): void {
   const isBatch = /\.(bat|cmd)$/i.test(target)
   const child = isBatch
-    ? spawn('cmd.exe', ['/d', '/s', '/c', `"${target}"`, ...args.map(quoteArg)], {
+    ? spawn('cmd.exe', ['/d', '/s', '/c', `"${buildWindowsBatchCommand(target, args)}"`], {
         windowsVerbatimArguments: true,
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
       })
     : spawn(target, args, { detached: true, stdio: 'ignore', windowsHide: true })
-  child.on('error', () => {})
+  // 启动失败（路径不存在 / 权限不足）时没有任何 UI 反馈，至少落到主进程日志里便于排查
+  child.on('error', (e) => {
+    console.error(`[p4v] 启动失败：${target} ${e.message}`)
+  })
   child.unref()
-}
-
-/** 参数含空格/引号时才加引号（Windows 命令行转义） */
-function quoteArg(arg: string): string {
-  if (!arg) return '""'
-  return /[\s"]/.test(arg) ? `"${arg.replace(/(\\*)"/g, '$1$1\\"')}"` : arg
 }
 
 function runCommand(cmd: string, args: string[], timeout: number): Promise<string> {

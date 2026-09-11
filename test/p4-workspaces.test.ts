@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 // 与既有测试一致：vitest 未配置 @/ 别名，用相对路径引用
 import {
   buildP4VArgs,
+  buildWindowsBatchCommand,
   parseP4Set,
   parseTaggedClients,
+  quoteWindowsArg,
   selectLocalWorkspaces,
 } from '../electron/main/p4'
 import { deriveWorkspaceBadge, sortWorkspaces, type P4Workspace } from '../src/services/p4Workspaces'
@@ -230,5 +232,56 @@ describe('buildP4VArgs', () => {
       'chenzhixu_C7_Online',
       'workspacewindow',
     ])
+  })
+})
+
+describe('quoteWindowsArg', () => {
+  it('无空格无引号时不加引号', () => {
+    expect(quoteWindowsArg('workspacewindow')).toBe('workspacewindow')
+    expect(quoteWindowsArg('-s')).toBe('-s')
+  })
+
+  it('含空格时加引号', () => {
+    expect(quoteWindowsArg('E:\\a b\\c.json')).toBe('"E:\\a b\\c.json"')
+  })
+
+  it('空字符串输出空引号对，避免参数丢失', () => {
+    expect(quoteWindowsArg('')).toBe('""')
+  })
+})
+
+describe('buildWindowsBatchCommand', () => {
+  /*
+   * 回归用例：p4vc.bat 装在 "C:\Program Files\Perforce\"（路径含空格）。
+   * 旧写法把 .bat 路径单独加引号后交给 `cmd /s /c`，/s 会剥掉最外层引号，
+   * 导致 cmd 在 "Program Files" 的空格处切断命令并报
+   * "'C:\Program' is not recognized"，表现为点击无反应。
+   */
+  it('整条命令外层加引号，含空格的 .bat 路径保持被引号包裹', () => {
+    const command = buildWindowsBatchCommand('C:\\Program Files\\Perforce\\p4vc.bat', [
+      '-c',
+      'chenzhixu_C7_Mainline',
+    ])
+    expect(command).toBe('"C:\\Program Files\\Perforce\\p4vc.bat" -c chenzhixu_C7_Mainline')
+  })
+
+  it('含空格的 -s 路径单独加引号，且不影响 .bat 路径的引号', () => {
+    const command = buildWindowsBatchCommand('C:\\Program Files\\Perforce\\p4vc.bat', [
+      'workspacewindow',
+      '-s',
+      'E:\\Project\\C7_project\\a b\\c.json',
+    ])
+    expect(command).toBe(
+      '"C:\\Program Files\\Perforce\\p4vc.bat" workspacewindow -s "E:\\Project\\C7_project\\a b\\c.json"',
+    )
+  })
+
+  it('拼进 cmd.exe 后，首个引号内是完整 .bat 路径（/s 剥掉最外层仍可解析）', () => {
+    const command = buildWindowsBatchCommand('C:\\Program Files\\Perforce\\p4vc.bat', ['-c', 'x'])
+    const argv = ['/d', '/s', '/c', `"${command}"`]
+    // cmd /s 的规则：剥掉一整行最外面的一对引号
+    const afterStrip = argv[3].slice(1, -1)
+    const firstToken = afterStrip.slice(1, afterStrip.indexOf('"', 1))
+    expect(firstToken).toBe('C:\\Program Files\\Perforce\\p4vc.bat')
   })
 })

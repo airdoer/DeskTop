@@ -179,3 +179,27 @@ export function buildP4VArgs(
   if (target) args.push('-s', target)
   return args
 }
+
+/* ---------- Windows 批处理（.bat/.cmd）启动 ---------- */
+
+/** 参数含空格/引号时才加引号；内部引号按 Windows 规则转义 */
+export function quoteWindowsArg(arg: string): string {
+  if (!arg) return '""'
+  return /[\s"]/.test(arg) ? `"${arg.replace(/(\\*)"/g, '$1$1\\"')}"` : arg
+}
+
+/**
+ * 构造 `cmd.exe /d /s /c "<command>"` 中 `<command>` 的内容。
+ *
+ * 关键点（踩过的坑）：`/s` 会剥掉命令行最外层的一对引号，所以如果只把 .bat 路径单独加引号，
+ * 引号被剥掉后 cmd 会在路径的空格处把命令切开 —— 例如
+ *   cmd /d /s /c "C:\Program Files\Perforce\p4vc.bat" -c xxx
+ * 会变成 `C:\Program Files\Perforce\p4vc.bat -c xxx`（无引号），cmd 于是报
+ *   'C:\Program' is not recognized as an internal or external command
+ * 表现为"点击毫无反应"。正确做法是给**整条命令**再包一层引号，
+ * 让 /s 只剥最外层，内层保留完整引用：
+ *   cmd /d /s /c ""C:\Program Files\Perforce\p4vc.bat" -c xxx -s "a b.json""
+ */
+export function buildWindowsBatchCommand(target: string, args: string[]): string {
+  return [`"${target}"`, ...args.map(quoteWindowsArg)].join(' ')
+}
