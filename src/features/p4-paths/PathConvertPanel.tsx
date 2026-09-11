@@ -11,7 +11,7 @@ import {
   SwapIcon,
   VersionControlIcon,
 } from '@/components/ui/icons'
-import { PERFORCE_BLUE } from '@/components/ui/brandColors'
+import { FOLDER_YELLOW, PERFORCE_BLUE } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import { openPath } from '@/services/paths'
 import {
@@ -193,21 +193,22 @@ function ResultList({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-tertiary leading-4">
-        <span>
-          所属分支 <span className="text-foreground-secondary">{value.mapping.label}</span>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-tertiary leading-5">
+        <span className="shrink-0">所属分支</span>
+        {/* 分支用成功色标签：一眼区分当前输入落在哪条分支 */}
+        <span className="shrink-0 px-1.5 py-0.5 rounded bg-success/10 text-success font-medium leading-4">
+          {value.mapping.label}
         </span>
-        <span>·</span>
-        <span className="min-w-0 truncate">
-          相对路径{' '}
-          <span className="font-mono text-foreground-secondary">
-            {value.relative ? value.relative : '（分支根目录）'}
-          </span>
-        </span>
+        <span className="shrink-0">相对路径</span>
+        <code className="min-w-0 font-mono text-[12px] text-foreground-secondary bg-surface-2 border border-border-subtle rounded px-1 py-0.5 break-all">
+          {value.relative ? value.relative : '（分支根目录）'}
+        </code>
         {value.workspace && (
           <>
-            <span>·</span>
-            <span className="min-w-0 truncate">工作区 {value.workspace.name}</span>
+            <span className="shrink-0">工作区</span>
+            <code className="min-w-0 font-mono text-[12px] text-foreground-secondary bg-surface-2 border border-border-subtle rounded px-1 py-0.5 break-all">
+              {value.workspace.name}
+            </code>
           </>
         )}
       </div>
@@ -267,9 +268,15 @@ function BranchCard({
         <span className="text-[13px] font-medium text-foreground leading-5 shrink-0">
           {entry.label}
         </span>
-        <span className="text-xs text-foreground-tertiary truncate leading-4">
-          {entry.workspaceName ?? '本机无此分支工作区'}
-        </span>
+        {entry.workspaceName ? (
+          <code className="min-w-0 font-mono text-[12px] text-foreground-secondary bg-surface-1 border border-border-subtle rounded px-1 py-0.5 truncate">
+            {entry.workspaceName}
+          </code>
+        ) : (
+          <span className="text-xs text-foreground-tertiary truncate leading-4">
+            本机无此分支工作区
+          </span>
+        )}
       </div>
 
       <PathLine
@@ -299,7 +306,7 @@ function BranchCard({
       <PathLine
         kind="本地"
         value={entry.localPath}
-        icon={<FolderSolidIcon size={14} />}
+        icon={<FolderSolidIcon size={14} style={{ color: FOLDER_YELLOW }} />}
         onCopy={() => entry.localPath && onCopy(entry.localPath, `${entry.label} 本地路径`)}
         actions={
           <AppButton
@@ -315,7 +322,7 @@ function BranchCard({
             aria-label="在资源管理器中打开"
             title={entry.localPath ? '在资源管理器中打开' : '本机没有该分支的工作区'}
           >
-            <FolderOpenIcon size={14} />
+            <FolderOpenIcon size={14} style={{ color: FOLDER_YELLOW }} />
           </AppButton>
         }
       />
@@ -352,8 +359,8 @@ function PathLine({
   }
 
   return (
-    <div className="group flex items-center gap-2 h-8 px-2 rounded-md hover:bg-surface-hover transition-colors">
-      <span className="shrink-0 flex items-center text-foreground-tertiary" aria-hidden>
+    <div className="flex items-center gap-2 h-8 px-2 rounded-md hover:bg-surface-hover transition-colors">
+      <span className="shrink-0 flex items-center" aria-hidden>
         {icon}
       </span>
       <span className="shrink-0 text-xs text-foreground-tertiary w-8">{kind}</span>
@@ -365,7 +372,8 @@ function PathLine({
       >
         {value}
       </button>
-      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      {/* 复制 / 跳转是主操作，常驻显示：hover 才出现会让用户以为没有入口 */}
+      <div className="flex items-center gap-0.5 shrink-0">
         <AppButton
           variant="ghost"
           size="sm"
