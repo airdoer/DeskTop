@@ -6,6 +6,7 @@ import { WebsitesPage } from '@/pages/WebsitesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { P4UpdatePage } from '@/pages/p4/P4UpdatePage'
 import { P4MergePage } from '@/pages/p4/P4MergePage'
+import { P4PathPage } from '@/pages/p4/P4PathPage'
 
 /*
  * App — 渲染 Application Shell 与各 Page 的路由映射.
@@ -19,6 +20,7 @@ const pages: Partial<Record<RouteId, ReactNode>> = {
   settings: <SettingsPage />,
   'p4-update': <P4UpdatePage />,
   'p4-merge': <P4MergePage />,
+  'p4-path': <P4PathPage />,
 }
 
 function App() {

@@ -6,6 +6,7 @@ import {
   RefreshArrowIcon,
   FolderOpenIcon,
   GlobeIcon,
+  SwapIcon,
   type IconProps,
 } from '@/components/ui/icons'
 
@@ -14,7 +15,14 @@ import {
  * 依据需求：主页 / 设置 / p4工具，p4工具 可展开二级（p4更新、p4merge 等）。
  */
 
-export type RouteId = 'home' | 'websites' | 'settings' | 'p4' | 'p4-update' | 'p4-merge'
+export type RouteId =
+  | 'home'
+  | 'websites'
+  | 'settings'
+  | 'p4'
+  | 'p4-update'
+  | 'p4-merge'
+  | 'p4-path'
 
 export interface NavLeaf {
   type: 'leaf'
@@ -51,6 +59,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { id: 'p4-update', label: 'p4更新', icon: RefreshArrowIcon },
       { id: 'p4-merge', label: 'p4merge', icon: FolderOpenIcon },
+      { id: 'p4-path', label: '路径转换', icon: SwapIcon },
     ],
   },
 ]
@@ -59,6 +68,7 @@ export const NAV_ITEMS: NavItem[] = [
 export const ROUTE_PARENT: Partial<Record<RouteId, string>> = {
   'p4-update': 'p4-group',
   'p4-merge': 'p4-group',
+  'p4-path': 'p4-group',
 }
 
 /** 默认展开的分组 */

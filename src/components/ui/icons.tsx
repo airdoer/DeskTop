@@ -182,6 +182,18 @@ export function RefreshArrowIcon(props: IconProps) {
   )
 }
 
+/** 路径互转：两条反向箭头，表示本地路径与 P4 路径之间的换算 */
+export function SwapIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 8h14" />
+      <path d="m15 5 3 3-3 3" />
+      <path d="M20 16H6" />
+      <path d="m9 13-3 3 3 3" />
+    </svg>
+  )
+}
+
 /** 侧边栏收起（内容区向左展开） */
 export function SidebarCollapseIcon(props: IconProps) {
   return (
