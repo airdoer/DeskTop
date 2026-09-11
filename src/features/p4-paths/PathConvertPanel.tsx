@@ -85,17 +85,25 @@ export function PathConvertPanel() {
     }
   }, [])
 
+  /**
+   * 在 P4V 中定位到该文件：p4vc -c <client> workspacewindow -s <path>
+   * 优先传本地路径（p4vc 的 -s 对本地路径定位最稳），本机无工作区时退回 depot 路径。
+   */
   const openP4V = useCallback(
-    async (key: string, client: string) => {
+    async (key: string, client: string, target: string) => {
       if (!snapshot) return
       setBusyKey(key)
       try {
-        const res = await openInP4V(client, {
-          port: snapshot.port,
-          user: snapshot.user,
-          charset: snapshot.charset,
-        })
-        if (res.ok) toast.success(`已在 P4V 中打开 ${client}`)
+        const res = await openInP4V(
+          client,
+          {
+            port: snapshot.port,
+            user: snapshot.user,
+            charset: snapshot.charset,
+          },
+          target,
+        )
+        if (res.ok) toast.success(`已在 P4V 中定位 ${client}`)
         else toast.error(`P4V 打开失败：${res.error ?? '未知错误'}`)
       } finally {
         setBusyKey(null)
@@ -189,7 +197,7 @@ function ResultList({
   busyKey: string | null
   onCopy: (text: string, label: string) => void
   onOpenLocal: (key: string, target: string) => void
-  onOpenP4V: (key: string, client: string) => void
+  onOpenP4V: (key: string, client: string, target: string) => void
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -247,7 +255,7 @@ function BranchCard({
   busyKey: string | null
   onCopy: (text: string, label: string) => void
   onOpenLocal: (key: string, target: string) => void
-  onOpenP4V: (key: string, client: string) => void
+  onOpenP4V: (key: string, client: string, target: string) => void
 }) {
   const badgeSeed = entry.workspaceName ?? entry.label
   const color = resolveWorkspaceColor(badgeSeed, labels)
@@ -292,11 +300,16 @@ function BranchCard({
             disabled={!entry.workspaceName}
             onClick={(e) => {
               e.stopPropagation()
-              if (entry.workspaceName) onOpenP4V(p4vKey, entry.workspaceName)
+              if (!entry.workspaceName) return
+              onOpenP4V(p4vKey, entry.workspaceName, entry.localPath ?? entry.depotPath)
             }}
             className="!px-1"
-            aria-label="在 P4V 中打开此工作区"
-            title={entry.workspaceName ? '在 P4V 中打开此工作区' : '本机没有该分支的工作区'}
+            aria-label="在 P4V 中定位到此文件"
+            title={
+              entry.workspaceName
+                ? `在 P4V 中定位到：${entry.localPath ?? entry.depotPath}`
+                : '本机没有该分支的工作区'
+            }
           >
             <P4VWindowIcon size={14} style={{ color: PERFORCE_BLUE }} />
           </AppButton>

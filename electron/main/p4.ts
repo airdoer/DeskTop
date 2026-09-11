@@ -141,19 +141,41 @@ export interface P4Connection {
   charset?: string
 }
 
+export interface P4VOpenOptions {
+  /**
+   * 要定位的文件/目录，对应 p4vc 的 -s（支持本地路径与 depot 路径）。
+   * 例：p4vc.bat -c chenzhixu_C7_Mainline workspacewindow -s "E:\Project\C7_project\Server\x.json"
+   */
+  target?: string
+  /**
+   * 是否直接用 p4vc 启动器（p4vc.bat / p4vc）。
+   * p4vc 内部已补 `-p4vc`，重复传会被 p4v 当成未知参数，因此用 p4vc 时不能再加。
+   * 直接启动 p4v.exe 时才需要 -p4vc。
+   */
+  viaP4vcLauncher?: boolean
+}
+
 /**
  * 构造「在 P4V 中打开指定 workspace」的命令行参数。
- * P4V 支持 p4vc 子命令模式（本机 p4vc.bat 即 `start p4v.exe -p4vc %*`）：
- *   p4v.exe -p4vc [-p port] [-u user] [-c client] [-C charset] workspacewindow
+ * 两种调用形态（语法来自 p4vc help workspacewindow）：
+ *   p4v.exe -p4vc [-p port] [-u user] [-c client] [-C charset] workspacewindow [-s path]
+ *   p4vc.bat      [-p port] [-u user] [-c client] [-C charset] workspacewindow [-s path]
  * workspacewindow：为给定连接打开工作区窗口；若已打开则带到前台。
- * （语法来自本机 `p4vc help workspacewindow` 输出）
+ * -s 必须放在子命令之后，用于直接定位到某个文件/目录。
  */
-export function buildP4VArgs(conn: P4Connection, client: string): string[] {
-  const args = ['-p4vc']
+export function buildP4VArgs(
+  conn: P4Connection,
+  client: string,
+  options: P4VOpenOptions = {},
+): string[] {
+  const args: string[] = []
+  if (!options.viaP4vcLauncher) args.push('-p4vc')
   if (conn.port) args.push('-p', conn.port)
   if (conn.user) args.push('-u', conn.user)
   args.push('-c', client)
   if (conn.charset) args.push('-C', conn.charset)
   args.push('workspacewindow')
+  const target = options.target?.trim()
+  if (target) args.push('-s', target)
   return args
 }

@@ -156,11 +156,16 @@ export interface P4VConnection {
 /**
  * 在 P4V 中打开指定 workspace。
  * 调用主进程 p4:open-p4v，传入 client 名与连接信息；
- * 主进程用 `p4v.exe -p4vc [-p port] [-u user] [-c client] [-C charset] workspacewindow` 启动。
+ * 主进程优先用 `p4vc.bat [-p] [-u] -c client [-C] workspacewindow [-s target]` 启动
+ * （p4vc 找不到时回退 `p4v.exe -p4vc ...`）。
+ *
+ * target：要定位的文件/目录，本地路径或 depot 路径，对应 p4vc 的 -s。
+ * 不传则只打开工作区窗口。
  */
 export async function openInP4V(
   client: string,
   conn: P4VConnection,
+  target?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const result = await window.ipcRenderer.invoke('p4:open-p4v', {
@@ -168,6 +173,7 @@ export async function openInP4V(
       port: conn.port,
       user: conn.user,
       charset: conn.charset,
+      target,
     })
     return (result as { ok: boolean; error?: string }) ?? { ok: false, error: '未知错误' }
   } catch (e) {

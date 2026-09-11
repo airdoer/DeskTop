@@ -3,7 +3,7 @@ import os from 'node:os'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import {
   buildP4VArgs,
   normalizeFavoriteNames,
@@ -262,6 +262,67 @@ function resolveP4VExecutable(): string | null {
   if (programFilesX86) candidates.push(path.join(programFilesX86, 'Perforce', 'p4v.exe'))
   candidates.push('p4v') // 兜底：依赖 PATH
   return candidates.find((c) => c === 'p4v' || existsSync(c)) ?? null
+}
+
+/**
+ * 解析 p4vc 启动器（随 P4V 安装包提供，Windows 下是 p4vc.bat）。
+ * 优先用 p4vc 而不是 p4v.exe：只有 p4vc 形态支持 `-s` 直接定位到文件/目录。
+ * 安装位置因人而异（自定义安装目录 / 便携版），因此按以下顺序找：
+ *   1. 环境变量 P4VC_PATH（用户显式指定，适配非标准安装）
+ *   2. Program Files / Program Files (x86) 下的 Perforce\p4vc.bat
+ *   3. PATH 查找（Windows 用 where，其他平台用 which）
+ */
+function resolveP4VCLauncher(): string | null {
+  const candidates: string[] = []
+  const custom = process.env.P4VC_PATH?.trim()
+  if (custom) candidates.push(custom)
+  const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+  candidates.push(path.join(programFiles, 'Perforce', 'p4vc.bat'))
+  const programFilesX86 = process.env['ProgramFiles(x86)']
+  if (programFilesX86) candidates.push(path.join(programFilesX86, 'Perforce', 'p4vc.bat'))
+
+  const found = candidates.find((c) => existsSync(c))
+  if (found) return found
+
+  try {
+    const cmd = process.platform === 'win32' ? 'where' : 'which'
+    const result = spawnSync(cmd, ['p4vc'], { encoding: 'utf8', windowsHide: true })
+    if (result.status === 0 && typeof result.stdout === 'string') {
+      const first = result.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean)
+      if (first) return first
+    }
+  } catch {
+    /* 查找失败则回退 p4v.exe */
+  }
+  return null
+}
+
+/**
+ * 启动常驻 GUI 进程（不等待退出）。
+ * .bat / .cmd 不能由 Node 直接执行，必须经 cmd.exe 包装，且参数要自行加引号
+ * （windowsVerbatimArguments 下 Node 不再替我们转义）。
+ */
+function spawnDetached(target: string, args: string[]): void {
+  const isBatch = /\.(bat|cmd)$/i.test(target)
+  const child = isBatch
+    ? spawn('cmd.exe', ['/d', '/s', '/c', `"${target}"`, ...args.map(quoteArg)], {
+        windowsVerbatimArguments: true,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+    : spawn(target, args, { detached: true, stdio: 'ignore', windowsHide: true })
+  child.on('error', () => {})
+  child.unref()
+}
+
+/** 参数含空格/引号时才加引号（Windows 命令行转义） */
+function quoteArg(arg: string): string {
+  if (!arg) return '""'
+  return /[\s"]/.test(arg) ? `"${arg.replace(/(\\*)"/g, '$1$1\\"')}"` : arg
 }
 
 function runCommand(cmd: string, args: string[], timeout: number): Promise<string> {
@@ -797,28 +858,40 @@ export function registerIpcHandlers(): void {
   )
 
   /*
-   * 在 P4V 中打开指定 workspace：
-   *   p4v.exe -p4vc [-p port] [-u user] [-c client] [-C charset] workspacewindow
+   * 在 P4V 中打开指定 workspace，可选直接定位到某个文件/目录（-s）：
+   *   p4vc.bat [-p port] [-u user] -c client [-C charset] workspacewindow [-s path]
+   *   p4v.exe -p4vc [-p port] [-u user] -c client [-C charset] workspacewindow [-s path]
    * workspacewindow 会为该连接打开工作区窗口，已打开则带到前台（见 p4vc help）。
+   * -s 支持本地路径与 depot 路径，放在子命令之后。
    * 连接参数由 Renderer 从快照透传；p4v 是常驻 GUI 进程，detached 启动后立即返回。
    */
   ipcMain.handle(
     'p4:open-p4v',
     async (
       _,
-      payload: { client: string; port?: string; user?: string; charset?: string },
+      payload: {
+        client: string
+        port?: string
+        user?: string
+        charset?: string
+        /** 要定位的文件/目录（本地或 depot 路径，对应 -s） */
+        target?: string
+      },
     ): Promise<{ ok: boolean; error?: string }> => {
       const client = typeof payload?.client === 'string' ? payload.client.trim() : ''
       if (!client) return { ok: false, error: '缺少 client 名' }
-      const p4v = resolveP4VExecutable()
-      if (!p4v) return { ok: false, error: '未检测到 p4v（P4 图形客户端）' }
+      const target = typeof payload?.target === 'string' ? payload.target.trim() : ''
+      // 优先 p4vc（只有它支持 -s 定位），找不到再回退 p4v.exe + -p4vc
+      const p4vc = resolveP4VCLauncher()
+      const command = p4vc ?? resolveP4VExecutable()
+      if (!command) return { ok: false, error: '未检测到 p4v / p4vc（P4 图形客户端）' }
       try {
         const args = buildP4VArgs(
           { port: payload?.port, user: payload?.user, charset: payload?.charset },
           client,
+          { target, viaP4vcLauncher: !!p4vc },
         )
-        const child = spawn(p4v, args, { detached: true, stdio: 'ignore', windowsHide: true })
-        child.unref()
+        spawnDetached(command, args)
         return { ok: true }
       } catch (e) {
         return { ok: false, error: shortenP4Error(e) }

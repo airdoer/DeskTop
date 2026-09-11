@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 // 与既有测试一致：vitest 未配置 @/ 别名，用相对路径引用
 import {
+  buildP4VArgs,
   parseP4Set,
   parseTaggedClients,
   selectLocalWorkspaces,
@@ -171,5 +172,63 @@ describe('deriveWorkspaceBadge', () => {
   it('单词名取前两个字母；空名回退 P4', () => {
     expect(deriveWorkspaceBadge('mainline')).toBe('MA')
     expect(deriveWorkspaceBadge('')).toBe('P4')
+  })
+})
+
+/*
+ * p4vc / p4v 启动参数.
+ * 依据 p4vc help workspacewindow：
+ *   p4vc.bat [-p port] [-u user] -c client [-C charset] workspacewindow [-s path]
+ *   p4v.exe  -p4vc  ...（同上）
+ * -s 必须放在子命令之后，用于直接定位到文件/目录（本地或 depot 路径）。
+ */
+describe('buildP4VArgs', () => {
+  const conn = { port: 'c7p4.office.it:1666', user: 'chenzhixu', charset: 'utf8' }
+
+  it('直接启动 p4v.exe 时带 -p4vc（兼容既有调用方式）', () => {
+    expect(buildP4VArgs(conn, 'chenzhixu_C7_Mainline')).toEqual([
+      '-p4vc',
+      '-p',
+      'c7p4.office.it:1666',
+      '-u',
+      'chenzhixu',
+      '-c',
+      'chenzhixu_C7_Mainline',
+      '-C',
+      'utf8',
+      'workspacewindow',
+    ])
+  })
+
+  it('用 p4vc 启动器时不重复 -p4vc：bat 内部已补该参数', () => {
+    const args = buildP4VArgs(conn, 'chenzhixu_C7_Mainline', { viaP4vcLauncher: true })
+    expect(args[0]).not.toBe('-p4vc')
+    expect(args).toContain('workspacewindow')
+    expect(args).toContain('-c')
+  })
+
+  it('带 -s 时定位参数放在 workspacewindow 之后', () => {
+    const args = buildP4VArgs(conn, 'chenzhixu_C7_Mainline', {
+      viaP4vcLauncher: true,
+      target: 'E:\\Project\\C7_project\\Server\\config\\local\\c7_dev.generated.json',
+    })
+    expect(args.slice(-3)).toEqual([
+      'workspacewindow',
+      '-s',
+      'E:\\Project\\C7_project\\Server\\config\\local\\c7_dev.generated.json',
+    ])
+  })
+
+  it('target 为空或纯空白时不追加 -s', () => {
+    expect(buildP4VArgs(conn, 'c', { target: '   ' })).not.toContain('-s')
+    expect(buildP4VArgs(conn, 'c', {})).not.toContain('-s')
+  })
+
+  it('连接信息缺失时省略对应参数，client 与子命令始终保留', () => {
+    expect(buildP4VArgs({}, 'chenzhixu_C7_Online', { viaP4vcLauncher: true })).toEqual([
+      '-c',
+      'chenzhixu_C7_Online',
+      'workspacewindow',
+    ])
   })
 })
