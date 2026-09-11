@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react'
 import { C7Logo } from '@/components/ui/C7Logo'
-import { ChevronDownIcon, ChevronRightIcon } from '@/components/ui/icons'
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  SidebarCollapseIcon,
+  SidebarExpandIcon,
+} from '@/components/ui/icons'
+import { readSidebarCollapsed, saveSidebarCollapsed } from '@/services/uiPreferences'
 import {
   DEFAULT_EXPANDED_GROUPS,
   NAV_ITEMS,
   ROUTE_PARENT,
   type NavGroup,
-  type NavItem,
   type NavLeaf,
   type RouteId,
 } from './navigation'
@@ -17,6 +22,9 @@ import {
  *   一级导航稳定，复杂功能通过二级展开处理。
  * §7 Compact Density：Sidebar Item 32-40px。
  * 视觉层级用 Background + 左侧 active indicator，不用 Shadow（§16）。
+ *
+ * 支持整体收起为图标列（rail）：宽度 224px → 56px，只保留图标，label 走原生 title
+ *   提示（nav 是 overflow-y-auto 容器，自定义气泡会被裁剪）。收起状态经 ui-prefs 持久化。
  */
 
 interface SidebarProps {
@@ -25,7 +33,19 @@ interface SidebarProps {
 }
 
 export function Sidebar({ active, onNavigate }: SidebarProps) {
+  const [collapsed, setCollapsed] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set(DEFAULT_EXPANDED_GROUPS))
+
+  // 收起状态从 Main Process 读回（面板首帧用默认值，读回后纠正，与视图模式一致的取舍）
+  useEffect(() => {
+    let alive = true
+    readSidebarCollapsed().then((value) => {
+      if (alive) setCollapsed(value)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   // 当 active route 属于某个分组时，自动展开该分组
   useEffect(() => {
@@ -44,9 +64,21 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
     })
   }
 
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev
+      void saveSidebarCollapsed(next)
+      return next
+    })
+  }
+
   return (
-    <aside className="flex flex-col w-56 shrink-0 h-full bg-surface-sidebar border-r border-border-subtle select-none">
-      <BrandHeader />
+    <aside
+      className={`flex flex-col h-full shrink-0 bg-surface-sidebar border-r border-border-subtle select-none transition-[width] duration-200 ease-out ${
+        collapsed ? 'w-14' : 'w-56'
+      }`}
+    >
+      <BrandHeader collapsed={collapsed} />
 
       <nav className="flex-1 min-h-0 overflow-y-auto py-2 px-2">
         <ul className="flex flex-col gap-0.5">
@@ -55,6 +87,7 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
               <LeafItem
                 key={item.id}
                 item={item}
+                collapsed={collapsed}
                 active={active === item.id}
                 onClick={() => onNavigate(item.id)}
               />
@@ -62,6 +95,7 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
               <GroupItem
                 key={item.id}
                 item={item}
+                collapsed={collapsed}
                 expanded={expanded.has(item.id)}
                 activeChild={item.children.some((c) => c.id === active)}
                 activeId={active}
@@ -73,34 +107,69 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
         </ul>
       </nav>
 
-      <Footer />
+      <CollapseToggle collapsed={collapsed} onToggle={toggleCollapsed} />
+      <Footer collapsed={collapsed} />
     </aside>
   )
 }
 
-function BrandHeader() {
+function BrandHeader({ collapsed }: { collapsed: boolean }) {
   return (
-    <div className="app-region-drag flex items-center gap-2 h-12 px-3 border-b border-border-subtle">
+    <div
+      className={`app-region-drag flex items-center h-12 border-b border-border-subtle ${
+        collapsed ? 'justify-center px-0' : 'gap-2 px-3'
+      }`}
+    >
       <C7Logo size={22} />
-      <span className="text-[13px] font-semibold text-foreground leading-5">C7 DeskTop</span>
+      {!collapsed && (
+        <span className="text-[13px] font-semibold text-foreground leading-5 truncate">
+          C7 DeskTop
+        </span>
+      )}
     </div>
   )
 }
 
-function Footer() {
+function CollapseToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   return (
-    <div className="px-3 py-2 border-t border-border-subtle text-xs text-foreground-tertiary leading-4">
-      v0.1.0 · chenzhixu
+    <div className="border-t border-border-subtle p-1.5">
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`group flex items-center h-8 rounded-md text-[13px] text-foreground-secondary transition-colors hover:bg-surface-hover hover:text-foreground ${
+          collapsed ? 'w-full justify-center' : 'w-full gap-2 px-2'
+        }`}
+        title={collapsed ? '展开侧边栏' : '收起侧边栏'}
+        aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+        aria-expanded={!collapsed}
+      >
+        {collapsed ? <SidebarExpandIcon size={16} /> : <SidebarCollapseIcon size={16} />}
+        {!collapsed && <span className="flex-1 text-left truncate">收起侧边栏</span>}
+      </button>
+    </div>
+  )
+}
+
+function Footer({ collapsed }: { collapsed: boolean }) {
+  return (
+    <div
+      className={`px-2 py-2 border-t border-border-subtle text-xs text-foreground-tertiary leading-4 ${
+        collapsed ? 'text-center text-[10px]' : 'px-3'
+      }`}
+    >
+      {collapsed ? 'v0.1' : 'v0.1.0 · chenzhixu'}
     </div>
   )
 }
 
 function LeafItem({
   item,
+  collapsed,
   active,
   onClick,
 }: {
   item: NavLeaf
+  collapsed: boolean
   active: boolean
   onClick: () => void
 }) {
@@ -109,11 +178,13 @@ function LeafItem({
       <button
         type="button"
         onClick={onClick}
-        className={itemClass(active)}
+        className={itemClass(active, false, collapsed)}
         aria-current={active ? 'page' : undefined}
+        title={collapsed ? item.label : undefined}
+        aria-label={collapsed ? item.label : undefined}
       >
         <item.icon size={16} />
-        <span className="flex-1 text-left truncate">{item.label}</span>
+        {!collapsed && <span className="flex-1 text-left truncate">{item.label}</span>}
       </button>
     </li>
   )
@@ -121,6 +192,7 @@ function LeafItem({
 
 function GroupItem({
   item,
+  collapsed,
   expanded,
   activeChild,
   activeId,
@@ -128,6 +200,7 @@ function GroupItem({
   onNavigate,
 }: {
   item: NavGroup
+  collapsed: boolean
   expanded: boolean
   activeChild: boolean
   activeId: RouteId
@@ -139,27 +212,39 @@ function GroupItem({
       <button
         type="button"
         onClick={onToggle}
-        className={itemClass(activeChild, true)}
+        className={itemClass(activeChild, true, collapsed)}
         aria-expanded={expanded}
+        title={collapsed ? item.label : undefined}
+        aria-label={collapsed ? item.label : undefined}
       >
         <item.icon size={16} />
-        <span className="flex-1 text-left truncate">{item.label}</span>
-        {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
+        {!collapsed && (
+          <>
+            <span className="flex-1 text-left truncate">{item.label}</span>
+            {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
+          </>
+        )}
       </button>
       {expanded && (
-        <ul className="flex flex-col gap-0.5 mt-0.5 ml-3 pl-2 border-l border-border-subtle">
+        <ul
+          className={`flex flex-col gap-0.5 mt-0.5 ${
+            collapsed ? 'items-center' : 'ml-3 pl-2 border-l border-border-subtle'
+          }`}
+        >
           {item.children.map((child) => {
             const active = activeId === child.id
             return (
-              <li key={child.id}>
+              <li key={child.id} className="w-full">
                 <button
                   type="button"
                   onClick={() => onNavigate(child.id)}
-                  className={itemClass(active)}
+                  className={itemClass(active, false, collapsed)}
                   aria-current={active ? 'page' : undefined}
+                  title={collapsed ? child.label : undefined}
+                  aria-label={collapsed ? child.label : undefined}
                 >
-                  <child.icon size={15} />
-                  <span className="flex-1 text-left truncate">{child.label}</span>
+                  <child.icon size={collapsed ? 14 : 15} />
+                  {!collapsed && <span className="flex-1 text-left truncate">{child.label}</span>}
                 </button>
               </li>
             )
@@ -170,13 +255,15 @@ function GroupItem({
   )
 }
 
-function itemClass(active: boolean, isGroupTrigger = false): string {
-  const base = 'group flex items-center gap-2 w-full h-8 px-2 rounded-md text-[13px] transition-colors'
+function itemClass(active: boolean, isGroupTrigger = false, collapsed = false): string {
+  const base =
+    'group flex items-center gap-2 w-full h-8 px-2 rounded-md text-[13px] transition-colors'
+  const rail = collapsed ? 'justify-center px-0' : ''
   if (active && !isGroupTrigger) {
-    return `${base} bg-surface-active text-primary font-medium`
+    return `${base} ${rail} bg-surface-active text-primary font-medium`
   }
   if (active && isGroupTrigger) {
-    return `${base} text-primary`
+    return `${base} ${rail} text-primary`
   }
-  return `${base} text-foreground-secondary hover:bg-surface-hover hover:text-foreground`
+  return `${base} ${rail} text-foreground-secondary hover:bg-surface-hover hover:text-foreground`
 }

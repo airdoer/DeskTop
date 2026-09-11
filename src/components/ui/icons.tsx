@@ -182,6 +182,28 @@ export function RefreshArrowIcon(props: IconProps) {
   )
 }
 
+/** 侧边栏收起（内容区向左展开） */
+export function SidebarCollapseIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9.5 4v16" />
+      <path d="m16 10-2.5 2 2.5 2" />
+    </svg>
+  )
+}
+
+/** 侧边栏展开（内容区向右展开） */
+export function SidebarExpandIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9.5 4v16" />
+      <path d="m13.5 10 2.5 2-2.5 2" />
+    </svg>
+  )
+}
+
 export function ListIcon(props: IconProps) {
   return (
     <svg {...base(props)}>

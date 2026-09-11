@@ -83,6 +83,39 @@ export async function saveP4StarredFilter(value: boolean): Promise<void> {
   }
 }
 
+/* ---------- 通用布尔偏好 ---------- */
+
+/** 读取任意 boolean 偏好：只有严格 true 才算 true，脏数据回退 false */
+export async function readBooleanPref(key: string): Promise<boolean> {
+  try {
+    const prefs = await getUiPreferences()
+    return prefs[key] === true
+  } catch {
+    return false
+  }
+}
+
+export async function saveBooleanPref(key: string, value: boolean): Promise<void> {
+  try {
+    await setUiPreferences({ [key]: value })
+  } catch {
+    /* 持久化失败不影响本次会话内的切换 */
+  }
+}
+
+/* ---------- 侧边栏折叠 ---------- */
+
+/** 侧边栏是否收起为图标列（true=收起） */
+export const SIDEBAR_COLLAPSED_KEY = 'sidebar.collapsed'
+
+export function readSidebarCollapsed(): Promise<boolean> {
+  return readBooleanPref(SIDEBAR_COLLAPSED_KEY)
+}
+
+export function saveSidebarCollapsed(value: boolean): Promise<void> {
+  return saveBooleanPref(SIDEBAR_COLLAPSED_KEY, value)
+}
+
 /* ---------- 面板折叠状态 ---------- */
 
 /** 各面板的折叠状态 key：值 boolean（true=折叠） */
@@ -96,20 +129,11 @@ export const PANEL_COLLAPSED_KEYS = {
 export type PanelCollapsedKey = (typeof PANEL_COLLAPSED_KEYS)[keyof typeof PANEL_COLLAPSED_KEYS]
 
 /** 读取单个面板的折叠状态 */
-export async function readPanelCollapsed(key: PanelCollapsedKey): Promise<boolean> {
-  try {
-    const prefs = await getUiPreferences()
-    return prefs[key] === true
-  } catch {
-    return false
-  }
+export function readPanelCollapsed(key: PanelCollapsedKey): Promise<boolean> {
+  return readBooleanPref(key)
 }
 
 /** 写入单个面板的折叠状态 */
-export async function savePanelCollapsed(key: PanelCollapsedKey, value: boolean): Promise<void> {
-  try {
-    await setUiPreferences({ [key]: value })
-  } catch {
-    /* 持久化失败不影响本次会话内的切换 */
-  }
+export function savePanelCollapsed(key: PanelCollapsedKey, value: boolean): Promise<void> {
+  return saveBooleanPref(key, value)
 }
