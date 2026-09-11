@@ -177,7 +177,7 @@ export function WebsitesPanel() {
       toast.warning(
         trimmed
           ? `链接无效：${trimmed.slice(0, 40)}，仅支持 http/https`
-          : '请填写链接（在「名称」右侧的输入框）',
+          : '请填写链接（表单第一行的输入框）',
       )
       return
     }
@@ -797,29 +797,23 @@ function EditRow({
 
   return (
     <div className="flex flex-col gap-1.5 p-2 rounded-md border border-primary/40 bg-surface-2">
-      <div className="flex gap-1.5">
-        <AppInput
-          placeholder="名称（可选，留空则用域名）"
-          value={formName}
-          onChange={(e) => onName(e.target.value)}
-          className="w-48 shrink-0"
-          aria-label="网站名称"
-        />
-        <AppInput
-          placeholder="链接，如 https://example.com"
-          value={formUrl}
-          onChange={(e) => onUrl(e.target.value)}
-          onKeyDown={(e) => {
-            // 中文输入法用 Enter 确认候选词时不提交：此时输入尚未落到 state，会拿到空值误判无效
-            if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
-            e.preventDefault()
-            onSave()
-          }}
-          className="flex-1 min-w-0"
-          aria-label="网站链接"
-          invalid={invalidUrl}
-        />
-      </div>
+      {/*
+       * 链接独占一行：它是唯一必填项。此前与名称同排且名称框 w-48 固定不收缩，
+       * 面板变窄时链接框被挤到几乎不可见，用户只看到名称框，于是链接一直为空。
+       */}
+      <AppInput
+        placeholder="链接，如 https://example.com"
+        value={formUrl}
+        onChange={(e) => onUrl(e.target.value)}
+        onKeyDown={(e) => {
+          // 中文输入法用 Enter 确认候选词时不提交：此时输入尚未落到 state，会拿到空值误判无效
+          if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+          e.preventDefault()
+          onSave()
+        }}
+        aria-label="网站链接"
+        invalid={invalidUrl}
+      />
       {invalidUrl && (
         <span className="text-xs text-error leading-4">链接无效，仅支持 http / https</span>
       )}
@@ -837,6 +831,21 @@ function EditRow({
         >
           {previewBadge ? previewBadge : <GlobeIcon size={16} />}
         </span>
+        {/* 名称/缩写/颜色同属可选的外观设置，与链接分开，宽度不足时整块换行 */}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-foreground-tertiary leading-4" htmlFor="website-name">
+            名称（留空用域名）
+          </label>
+          <AppInput
+            id="website-name"
+            block={false}
+            className="w-40"
+            placeholder="自动"
+            value={formName}
+            onChange={(e) => onName(e.target.value)}
+            aria-label="网站名称"
+          />
+        </div>
         <div className="flex flex-col gap-1">
           <label className="text-xs text-foreground-tertiary leading-4" htmlFor="website-badge">
             缩写（最多 {MAX_BADGE_LENGTH} 个字）
