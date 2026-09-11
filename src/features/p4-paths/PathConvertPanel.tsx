@@ -112,12 +112,25 @@ export function PathConvertPanel() {
     [snapshot],
   )
 
+  /*
+   * 气泡宽度上限 320px（见 ui/InfoTip），示例路径 60~70 字符且无空格，
+   * 因此单独成行 + font-mono + break-all，避免在半角字符处撑破气泡。
+   */
   const help = (
-    <div>
-      粘贴 6 个路径中的任意一个（Mainline / Preonline / Online 的本地路径或 P4 路径），
-      自动换算出其余全部路径。示例：
-      E:\Project\C7_project\Server\config\local\c7_dev.generated.json 或
-      //C7/Development/Mainline/Server/config/local/c7_dev.generated.json
+    <div className="space-y-1.5">
+      <div>
+        粘贴 6 个路径中的任意一个（Mainline / Preonline / Online 的本地路径或 P4 路径），
+        自动换算出其余全部路径。
+      </div>
+      <div className="space-y-0.5">
+        <div className="text-foreground-tertiary">示例：</div>
+        <div className="break-all font-mono text-[11px] leading-4 text-foreground">
+          E:\Project\C7_project\Server\config\local\c7_dev.generated.json
+        </div>
+        <div className="break-all font-mono text-[11px] leading-4 text-foreground">
+          //C7/Development/Mainline/Server/config/local/c7_dev.generated.json
+        </div>
+      </div>
     </div>
   )
 

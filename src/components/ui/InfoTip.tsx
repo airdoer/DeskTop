@@ -44,10 +44,18 @@ export function InfoTip({ content, label = '说明' }: { content: ReactNode; lab
         <HelpIcon size={13} />
       </button>
       {open && (
+        /*
+         * 气泡宽度策略：
+         * - w-max：短文案按内容自适应，不会撑成固定宽度的方框
+         * - max-w-[320px]：上限 320px（约 26 个汉字 / 50 个半角字符一行），
+         *   再宽就显得像弹窗而非提示，且可能顶到内容区右边界
+         * - break-words：说明里常有本地 / P4 绝对路径（几十个字符且无空格），
+         *   默认 overflow-wrap: normal 不会断行，文字会溢出气泡背景框
+         */
         <span
           role="tooltip"
           id={tooltipId}
-          className="absolute left-0 top-full z-20 mt-1.5 w-max max-w-[220px] rounded-md border border-border bg-surface-3 px-2 py-1.5 text-xs leading-4 text-foreground-secondary"
+          className="absolute left-0 top-full z-20 mt-1.5 w-max max-w-[320px] break-words rounded-md border border-border bg-surface-3 px-2.5 py-2 text-left text-xs leading-5 text-foreground-secondary"
         >
           {content}
         </span>
