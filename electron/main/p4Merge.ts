@@ -332,10 +332,14 @@ export function parseDescribeOutput(output: string): { change: number; descripti
 }
 
 /**
- * 解析 `p4 opened -c <change>` / `p4 opened -a <files>` 输出.
+ * 解析 `p4 opened -C <client>` / `p4 opened -c <change>` 输出.
  * 行格式：//depot/path#rev action change <change> (type) by user@client
  * 例：//C7/Weekly/Client/A.lua#2 edit default (text) by chenzhixu@chenzhixu_C7_Weekly
  * (type) 可能在 "by ..." 之前，所以 fileType 正则不锚定行尾.
+ *
+ * 注意：无已打开文件时 p4 输出 "File(s) not opened anywhere."（退出码 0），
+ *   带 file 参数时输出 "//path/... - file(s) not opened anywhere."（无 `#`），
+ *   两者都不以 `#` 出现，被下面的 `hash < 0` 跳过，因此不会误判为已打开文件.
  */
 export function parseOpenedOutput(output: string): P4OpenedFile[] {
   const result: P4OpenedFile[] = []
@@ -563,6 +567,33 @@ export function buildSyncArgs(params: {
   const dirs = dedupeCommonParentDirs(params.files)
   const targets = dirs.length > 0 ? dirs.map((d) => `${d}/...`) : params.files
   return ['-c', params.targetClient, 'sync', ...targets]
+}
+
+/**
+ * `p4 opened` 参数：查询指定 client 的已打开文件（未提交修改）.
+ *
+ * 两个必须遵守的点（踩过坑，勿改回）：
+ *   1. `-C <client>` 必须写在子命令**之后** —— 写在 `opened` 之前会被 p4 当成全局的
+ *      charset 选项（`-C charset`），直接报 "Character set must be one of: ..."；
+ *   2. **不能用 `-a`** —— `-a` 是「列出全服所有 client 的已打开文件」，实测本服返回
+ *      80 万+ 条（含他人 //ArtSource 等），会让「目标 Workspace 是否干净」永远为脏。
+ *      全局 `-c <client>` 只决定路径解释所用 client，不做已打开文件过滤。
+ *
+ * change 不为空时按 changelist 过滤（此时 p4 会忽略 -C/-u/-a，见 `p4 help opened`）.
+ */
+export function buildOpenedArgs(params: {
+  client: string
+  files?: string[]
+  change?: number | string
+}): string[] {
+  const args = ['-c', params.client, 'opened']
+  if (params.change !== undefined && params.change !== '') {
+    args.push('-c', String(params.change))
+    return args
+  }
+  args.push('-C', params.client)
+  if (params.files && params.files.length > 0) args.push(...params.files)
+  return args
 }
 
 /**

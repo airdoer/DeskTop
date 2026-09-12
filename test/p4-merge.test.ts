@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 // 与既有测试一致：vitest 未配置 @/ 别名，用相对路径引用
 import {
   buildIntegrateArgs,
+  buildOpenedArgs,
   buildPendingChangeDescription,
   buildResolveArgs,
   buildResolveOverrideArgs,
@@ -21,7 +22,15 @@ import {
   PIPELINE_STEP_ORDER,
   resolveMergeToolArgs,
 } from '../electron/main/p4Merge'
-import { buildRedmineIssueUrl, humanizeDate, parseRedmineRefs } from '../src/services/p4Merge'
+import {
+  buildRedmineIssueUrl,
+  findWorkspaceByBranch,
+  humanizeDate,
+  parseRedmineRefs,
+  recommendTargetBranch,
+  resolveWorkspaceBranch,
+  sortWorkspacesByBranch,
+} from '../src/services/p4Merge'
 
 /*
  * 样本取自 spec §10 与本机 p4 真实输出形态：
@@ -463,6 +472,55 @@ describe('buildRedmineIssueUrl', () => {
   })
 })
 
+describe('buildOpenedArgs（Preflight「目标 Workspace 未提交修改」查询）', () => {
+  const CLIENT = 'chenzhixu_C7_Weekly'
+
+  it('查询指定 client 的已打开文件：-C 在子命令之后', () => {
+    expect(buildOpenedArgs({ client: CLIENT })).toEqual(['-c', CLIENT, 'opened', '-C', CLIENT])
+  })
+
+  it('回归：绝不能带 -a（-a 是全服所有 client，实测本服 80 万+ 条 → 目标工作区永远被判脏）', () => {
+    expect(buildOpenedArgs({ client: CLIENT })).not.toContain('-a')
+    expect(buildOpenedArgs({ client: CLIENT, files: ['//C7/Release/Preonline/A.lua'] })).not.toContain('-a')
+    expect(buildOpenedArgs({ client: CLIENT, change: 2137156 })).not.toContain('-a')
+  })
+
+  it('限定文件时文件参数追加在最后', () => {
+    expect(buildOpenedArgs({ client: CLIENT, files: ['//a/A.lua', '//a/B.lua'] })).toEqual([
+      '-c', CLIENT, 'opened', '-C', CLIENT, '//a/A.lua', '//a/B.lua',
+    ])
+  })
+
+  it('按 changelist 过滤时不带 -C（p4 会忽略 -C/-u/-a）', () => {
+    expect(buildOpenedArgs({ client: CLIENT, change: 2137156 })).toEqual([
+      '-c', CLIENT, 'opened', '-c', '2137156',
+    ])
+  })
+})
+
+describe('parseOpenedOutput 的「无已打开文件」文案', () => {
+  // 退出码为 0，靠文案判断；三种形态都不能被当成已打开文件
+  it('File(s) not opened anywhere.（-C <client> 无文件时）', () => {
+    expect(parseOpenedOutput('File(s) not opened anywhere.\n')).toEqual([])
+  })
+  it('//path/... - file(s) not opened anywhere.（带 file 参数时）', () => {
+    expect(parseOpenedOutput('//C7/Release/Preonline/Client/... - file(s) not opened anywhere.\n')).toEqual([])
+  })
+  it('正常行仍可解析（含 by user@client）', () => {
+    const parsed = parseOpenedOutput(
+      '//C7/Release/Preonline/Client/A.lua#2 edit default (text) by chenzhixu@chenzhixu_C7_Weekly\n',
+    )
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]).toMatchObject({
+      depotPath: '//C7/Release/Preonline/Client/A.lua',
+      revision: '2',
+      action: 'edit',
+      change: 'default',
+      client: 'chenzhixu_C7_Weekly',
+    })
+  })
+})
+
 describe('humanizeDate', () => {
   // 固定 now 为 2026/09/11 20:20:32 之后某时刻，便于断言相对时间
   const now = new Date(2026, 8, 11, 20, 30, 0) // 2026-09-11 20:30:00
@@ -486,5 +544,88 @@ describe('humanizeDate', () => {
   it('非法输入返回空', () => {
     expect(humanizeDate('not a date')).toBe('')
     expect(humanizeDate('')).toBe('')
+  })
+})
+
+/*
+ * 「猜你想选」的分支判定 / 方向推荐.
+ * 样本取自本机真实 client（p4 -ztag clients -u chenzhixu）过滤出 Root 存在的本地工作区：
+ *   chenzhixu_C7_Mainline  //C7/Development/Mainline
+ *   chenzhixu_C7_Weekly    //C7/Release/Preonline       ← 名字不含 Preonline，必须按 stream 判
+ *   chenzhixu_C7_Online    //C7/Release/Online
+ *   chenzhixu_onlineDesign //C7/Release/vOnlineDesign   ← 名字含 online，但不是 Online 分支
+ */
+const LOCAL_WORKSPACES = [
+  { name: 'chenzhixu_C7_Mainline', stream: '//C7/Development/Mainline' },
+  { name: 'chenzhixu_C7_Weekly', stream: '//C7/Release/Preonline' },
+  { name: 'chenzhixu_C7_Online', stream: '//C7/Release/Online' },
+  { name: 'chenzhixu_onlineDesign', stream: '//C7/Release/vOnlineDesign' },
+  { name: 'czx_test_switchStream', stream: '//C7/Development/vFlowchartTool' },
+]
+
+describe('resolveWorkspaceBranch', () => {
+  it('按 stream 末段判定三个主分支', () => {
+    expect(resolveWorkspaceBranch(LOCAL_WORKSPACES[0])).toBe('mainline')
+    expect(resolveWorkspaceBranch(LOCAL_WORKSPACES[1])).toBe('preonline')
+    // 回归：旧实现 /(^|_)online($|_)/ 与 /\/online\// 都匹配不到 `//C7/Release/Online`
+    //   （前面拼了 client 名、后面没有斜杠），Online 被判为 null → Target 就没有「猜你想选」
+    expect(resolveWorkspaceBranch(LOCAL_WORKSPACES[2])).toBe('online')
+  })
+
+  it('名字里含 online / preonline 的其它 stream 不误判', () => {
+    expect(resolveWorkspaceBranch({ name: 'chenzhixu_onlineDesign', stream: '//C7/Release/vOnlineDesign' })).toBeNull()
+    expect(resolveWorkspaceBranch({ name: 'x_3569', stream: '//C7/Release/vPreonlineServerDeploy' })).toBeNull()
+  })
+
+  it('stream 优先于 client 名', () => {
+    expect(resolveWorkspaceBranch({ name: 'chenzhixu_C7_Weekly' })).toBe('weekly')
+    expect(resolveWorkspaceBranch({ name: 'chenzhixu_C7_Weekly', stream: '//C7/Release/Preonline' })).toBe('preonline')
+  })
+
+  it('无 stream 时回退按 client 名分段匹配（不做子串匹配）', () => {
+    expect(resolveWorkspaceBranch({ name: 'chenzhixu_C7_Mainline' })).toBe('mainline')
+    expect(resolveWorkspaceBranch({ name: 'chenzhixu_C7_Online' })).toBe('online')
+    expect(resolveWorkspaceBranch({ name: 'chenzhixu_onlineDesign' })).toBeNull()
+    expect(resolveWorkspaceBranch({ name: 'chenzhixu_MainlineBackup' })).toBeNull()
+  })
+
+  it('大小写不敏感；空值返回 null', () => {
+    expect(resolveWorkspaceBranch({ name: 'a', stream: '//c7/release/PREONLINE' })).toBe('preonline')
+    expect(resolveWorkspaceBranch(undefined)).toBeNull()
+  })
+})
+
+describe('recommendTargetBranch（Merge 方向推荐）', () => {
+  it('Mainline → Preonline、Preonline → Online', () => {
+    expect(recommendTargetBranch(LOCAL_WORKSPACES[0])).toBe('preonline')
+    expect(recommendTargetBranch(LOCAL_WORKSPACES[1])).toBe('online')
+  })
+
+  it('末端分支与未知分支不推荐', () => {
+    expect(recommendTargetBranch(LOCAL_WORKSPACES[2])).toBeNull()
+    expect(recommendTargetBranch({ name: 'a', stream: '//C7/Development/ArtDev' })).toBeNull()
+    expect(recommendTargetBranch(undefined)).toBeNull()
+  })
+})
+
+describe('findWorkspaceByBranch / sortWorkspacesByBranch', () => {
+  it('按分支取到唯一匹配的 workspace', () => {
+    expect(findWorkspaceByBranch(LOCAL_WORKSPACES, 'mainline')?.name).toBe('chenzhixu_C7_Mainline')
+    expect(findWorkspaceByBranch(LOCAL_WORKSPACES, 'preonline')?.name).toBe('chenzhixu_C7_Weekly')
+    expect(findWorkspaceByBranch(LOCAL_WORKSPACES, 'online')?.name).toBe('chenzhixu_C7_Online')
+  })
+
+  it('branch 为 null 时返回 undefined（不落到错误的工作区）', () => {
+    expect(findWorkspaceByBranch(LOCAL_WORKSPACES, null)).toBeUndefined()
+  })
+
+  it('排序：Mainline > Preonline > Online > 其它（按名）', () => {
+    expect(sortWorkspacesByBranch(LOCAL_WORKSPACES).map((w) => w.name)).toEqual([
+      'chenzhixu_C7_Mainline',
+      'chenzhixu_C7_Weekly',
+      'chenzhixu_C7_Online',
+      'chenzhixu_onlineDesign',
+      'czx_test_switchStream',
+    ])
   })
 })

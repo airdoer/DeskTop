@@ -185,6 +185,14 @@ export async function describeChangelist(params: { change: number; client?: stri
   }
 }
 
+/**
+ * 查询某个 workspace 的已打开文件（未提交修改）.
+ * 主进程执行 `p4 -c <client> opened -C <client> [files...]`：
+ *   - `-C <client>` 必须写在子命令之后（写在 `opened` 之前会被当成全局 charset 选项），
+ *     语义是「该 client 的已打开文件」，不限用户；
+ *   - **不要用 `-a`**：`-a` 是「全服所有 client 的已打开文件」，会把整个 depot 的
+ *     待提交文件都算进来（实测本服 80 万+ 条）.
+ */
 export async function checkOpened(params: { client: string; files?: string[] }): Promise<OpenedResult> {
   try {
     return (await window.ipcRenderer.invoke('p4-merge:opened', params)) as OpenedResult
@@ -296,6 +304,100 @@ export function inferBranchMappingFromStreams(sourceStream?: string, targetStrea
     source: normalizeDepotRoot(sourceStream),
     target: normalizeDepotRoot(targetStream),
   }
+}
+
+/* ---------- 本地辅助：分支分类与 Merge 方向推荐（纯函数）---------- */
+
+/** Merge 涉及的分支（业务方向：Mainline → Preonline → Online） */
+export type MergeBranch = 'mainline' | 'preonline' | 'online' | 'weekly'
+
+/**
+ * 单个「段」→ 分支：整段精确匹配（大小写不敏感），不做子串匹配.
+ * 必须精确，否则 `//C7/Release/vOnlineDesign`、`//C7/Release/vPreonlineServerDeploy`
+ * 这类名字里带 online/preonline 的**另一个** stream 会被误判成目标分支，
+ * 推荐就会落到错误的 workspace 上.
+ */
+function branchFromSegment(seg: string): MergeBranch | null {
+  const s = seg.trim().toLowerCase()
+  if (s === 'mainline') return 'mainline'
+  if (s === 'preonline' || s === 'pre_online' || s === 'pre-online') return 'preonline'
+  if (s === 'online') return 'online'
+  if (s === 'weekly') return 'weekly'
+  return null
+}
+
+/**
+ * 判定 workspace 属于哪个分支.
+ *
+ * 优先级：**有 stream 就只看 stream**，无 stream 才回退按 client 名分段匹配.
+ *   - stream 是权威来源：Preonline 的 workspace 可能叫 `chenzhixu_C7_Weekly`
+ *     （名字里没有 Preonline），按名字会被判成 weekly；
+ *   - stream 从末段往前找，取第一个命中段（`//C7/Release/Preonline` → preonline）；
+ *   - client 名按非字母数字切段（`chenzhixu_C7_Mainline` → Mainline）.
+ *
+ * 例：`//C7/Release/Online` → online；`//C7/Release/vOnlineDesign` → null（不推荐）.
+ */
+export function resolveWorkspaceBranch(
+  ws?: { name: string; stream?: string },
+): MergeBranch | null {
+  if (!ws) return null
+  if (ws.stream) {
+    const segs = ws.stream.split(/[\\/]+/).filter(Boolean)
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const b = branchFromSegment(segs[i])
+      if (b) return b
+    }
+    return null
+  }
+  for (const seg of ws.name.split(/[^a-zA-Z0-9]+/)) {
+    const b = branchFromSegment(seg)
+    if (b) return b
+  }
+  return null
+}
+
+const BRANCH_RANK: Record<MergeBranch, number> = {
+  mainline: 0,
+  preonline: 1,
+  online: 2,
+  weekly: 3,
+}
+
+/** 按分支优先级排序：Mainline > Preonline > Online > Weekly > 其它（按名） */
+export function sortWorkspacesByBranch<T extends { name: string; stream?: string }>(
+  list: T[],
+): T[] {
+  return list.slice().sort((a, b) => {
+    const ba = resolveWorkspaceBranch(a)
+    const bb = resolveWorkspaceBranch(b)
+    const ra = ba ? BRANCH_RANK[ba] : 4
+    const rb = bb ? BRANCH_RANK[bb] : 4
+    if (ra !== rb) return ra - rb
+    return a.name.localeCompare(b.name)
+  })
+}
+
+/** 取第一个属于该分支的 workspace（branch 为 null 时返回 undefined） */
+export function findWorkspaceByBranch<T extends { name: string; stream?: string }>(
+  list: T[],
+  branch: MergeBranch | null,
+): T | undefined {
+  if (!branch) return undefined
+  return list.find((w) => resolveWorkspaceBranch(w) === branch)
+}
+
+/**
+ * Merge 方向推荐（下游分支）：
+ *   Mainline → Preonline、Preonline → Online；
+ *   其它分支（含已到末端的 Online）不推荐，返回 null.
+ */
+export function recommendTargetBranch(
+  source?: { name: string; stream?: string },
+): MergeBranch | null {
+  const b = resolveWorkspaceBranch(source)
+  if (b === 'mainline') return 'preonline'
+  if (b === 'preonline') return 'online'
+  return null
 }
 
 /** 从 depot 路径取扩展名（小写，含 `.`） */

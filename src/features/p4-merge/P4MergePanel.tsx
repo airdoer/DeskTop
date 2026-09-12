@@ -18,10 +18,13 @@ import {
   createInitialPipeline,
   describeChangelist,
   executeMerge,
+  findWorkspaceByBranch,
   inferBranchMappingFromStreams,
   listChangelists,
   mapToTargetPath,
   previewMerge,
+  recommendTargetBranch,
+  sortWorkspacesByBranch,
   subscribeMergeProgress,
   type BranchMapping,
   type ExecuteMergeParams,
@@ -52,53 +55,15 @@ import { PANEL_COLLAPSED_KEYS } from '@/services/uiPreferences'
  *   最终提供跳转 P4V 的快捷操作（Result 步骤右侧的 P4V 跳转区）.
  *
  * 推荐方向：Mainline → Preonline → Online（业务惯例）.
- *   Source 默认选当前用户的 Mainline workspace（标注「猜你想选」）；
- *   Target 默认推荐 Preonline；Source 选 Online 时不再推荐下游（已到末端）.
+ *   Source 默认选当前用户的 Mainline（标注「猜你想选」）；
+ *   Target 的推荐**跟随 Source 的分支**：Source 选 Mainline → 推荐 Preonline，
+ *   Source 选 Preonline → 推荐 Online；Source 已到末端（Online 等）则不推荐.
+ *   推荐是「默认态」的辅助：用户手动选过 Source 之后，Source 自身不再展示
+ *   「猜你想选」（推荐只在自动默认时有意义），改为由 Target 承接推荐.
  *
  * Sync 模式固定为 file（只同步 CL 涉及文件），不作为用户选项 ——
  *   Sync 范围由所选 Changelist 的文件列表决定（spec §13/§14）.
  */
-
-/**
- * workspace 名称（或 stream）含哪些关键字判定为哪个分支.
- * 取自 P4 client 常见命名 `chenzhixu_C7_Mainline` 与 stream `//C7/Development/Mainline`.
- */
-function matchBranch(ws?: P4Workspace): 'mainline' | 'preonline' | 'online' | 'weekly' | null {
-  if (!ws) return null
-  const hay = `${ws.name} ${ws.stream ?? ''}`.toLowerCase()
-  if (/mainline/.test(hay)) return 'mainline'
-  if (/preonline|pre_online|pre-online/.test(hay)) return 'preonline'
-  if (/(^|_)online($|_)/.test(hay) || /\/online\//.test(hay)) return 'online'
-  if (/weekly/.test(hay)) return 'weekly'
-  return null
-}
-
-/** 按分支优先级排序：Mainline > Preonline > Online > Weekly > 其它（按名） */
-function sortWorkspacesByBranch(list: P4Workspace[]): P4Workspace[] {
-  const rank = (b: ReturnType<typeof matchBranch>) => {
-    switch (b) {
-      case 'mainline': return 0
-      case 'preonline': return 1
-      case 'online': return 2
-      case 'weekly': return 3
-      default: return 4
-    }
-  }
-  return list.slice().sort((a, b) => {
-    const ra = rank(matchBranch(a))
-    const rb = rank(matchBranch(b))
-    if (ra !== rb) return ra - rb
-    return a.name.localeCompare(b.name)
-  })
-}
-
-/** Merge 方向推荐：Mainline→Preonline，Preonline→Online；其它分支不推荐 */
-function recommendTargetBranch(source: P4Workspace | undefined): 'preonline' | 'online' | null {
-  const b = matchBranch(source)
-  if (b === 'mainline') return 'preonline'
-  if (b === 'preonline') return 'online'
-  return null
-}
 
 export function P4MergePanel() {
   const { collapsed, toggle } = usePanelCollapsed(PANEL_COLLAPSED_KEYS.p4Merge)
@@ -108,6 +73,14 @@ export function P4MergePanel() {
   // 表单参数
   const [sourceClient, setSourceClient] = useState('')
   const [targetClient, setTargetClient] = useState('')
+  /**
+   * 「猜你想选」的生命周期：推荐只是默认态的辅助，一旦用户手动选过该字段，
+   * 就不再对该字段展示推荐（避免推荐停留在旧分支上误导用户）.
+   *   sourceTouched：用户手动改过 Source → Source 不再显示「猜你想选」；
+   *   targetTouched：用户手动改过 Target → 不再跟随 Source 自动重推.
+   */
+  const [sourceTouched, setSourceTouched] = useState(false)
+  const [targetTouched, setTargetTouched] = useState(false)
   /**
    * Sync 模式固定为 file（只同步 CL 涉及的目标文件）.
    * 不再作为用户选项 —— Sync 范围由所选 Changelist 的文件列表决定（spec §13/§14）.
@@ -177,44 +150,40 @@ export function P4MergePanel() {
   const sourceWs = workspaces.find((w) => w.name === sourceClient)
   const targetWs = workspaces.find((w) => w.name === targetClient)
 
-  /** 推荐的 Source workspace 名（当前用户的 Mainline） */
+  /** 推荐的 Source workspace 名（当前用户的 Mainline）；用户手动选过 Source 后不再推荐 */
   const recommendedSourceName = useMemo(
-    () => workspaces.find((w) => matchBranch(w) === 'mainline')?.name ?? '',
-    [workspaces],
+    () => (sourceTouched ? '' : (findWorkspaceByBranch(workspaces, 'mainline')?.name ?? '')),
+    [workspaces, sourceTouched],
   )
-  /** 推荐的 Target workspace 名（基于 Source 分支：Mainline→Preonline、Preonline→Online） */
-  const recommendedTargetName = useMemo(() => {
-    const tb = recommendTargetBranch(sourceWs)
-    if (!tb) return ''
-    return workspaces.find((w) => matchBranch(w) === tb)?.name ?? ''
-  }, [workspaces, sourceWs])
+  /** 推荐的 Target workspace 名（跟随 Source 分支：Mainline→Preonline、Preonline→Online） */
+  const recommendedTargetName = useMemo(
+    () => findWorkspaceByBranch(workspaces, recommendTargetBranch(sourceWs))?.name ?? '',
+    [workspaces, sourceWs],
+  )
 
   /**
-   * 工作区快照加载后自动推荐默认 Source / Target：
-   *   Source = 当前用户的 Mainline workspace（标注「猜你想选」）
-   *   Target = Preonline workspace（Mainline→Preonline 方向）
-   * 用户手动改过 Source 后，Target 跟随 Source 重新推荐（仅当用户未手动改过 Target）.
+   * 工作区快照加载后自动填入默认 Source（当前用户的 Mainline，标注「猜你想选」）.
+   * Target 不在这里填 —— 统一由下面的「跟随推荐」effect 处理，避免两处逻辑各写一份.
    */
   const autoSelected = useRef(false)
-  const targetUserTouched = useRef(false)
   useEffect(() => {
     if (autoSelected.current || !snapshot?.available || workspaces.length === 0) return
-    const mainlineWs = workspaces.find((w) => matchBranch(w) === 'mainline')
-    if (!sourceClient && mainlineWs) setSourceClient(mainlineWs.name)
-    const targetBranch = recommendTargetBranch(mainlineWs)
-    if (!targetClient && targetBranch) {
-      const tgt = workspaces.find((w) => matchBranch(w) === targetBranch)
-      if (tgt) setTargetClient(tgt.name)
-    }
-    if (mainlineWs) autoSelected.current = true
-  }, [snapshot, workspaces, sourceClient, targetClient])
+    const mainlineWs = findWorkspaceByBranch(workspaces, 'mainline')
+    if (!mainlineWs) return
+    if (!sourceClient) setSourceClient(mainlineWs.name)
+    autoSelected.current = true
+  }, [snapshot, workspaces, sourceClient])
 
-  /** Source 切换后自动重推 Target（用户未手动改 Target 时跟随） */
+  /**
+   * Target 跟随 Source 的推荐自动更新（用户未手动改 Target 时）.
+   * Source 从 Mainline 改成 Preonline → Target 由 Preonline 变为 Online 并打上「猜你想选」.
+   * 无推荐（Source 已在末端）时保持当前值不动，不静默清空用户已有选择.
+   */
   useEffect(() => {
-    if (targetUserTouched.current) return
+    if (targetTouched) return
     if (!recommendedTargetName) return
     if (targetClient !== recommendedTargetName) setTargetClient(recommendedTargetName)
-  }, [recommendedTargetName, targetClient])
+  }, [recommendedTargetName, targetClient, targetTouched])
 
   useEffect(() => {
     const inferred = inferBranchMappingFromStreams(sourceWs?.stream, targetWs?.stream)
@@ -370,7 +339,9 @@ export function P4MergePanel() {
         <div className="text-xs leading-5">
           <div>选择源/目标 Workspace → 加载 Changelist → 预览文件映射 → 执行 Merge（不自动 Submit）。</div>
           <div>核心流程仅依赖 p4.exe / p4merge.exe，不依赖 P4V；P4V 跳转为辅助能力。</div>
-          <div>Source 默认选 Mainline（猜你想选），Target 推荐 Preonline；支持手动改用户名帮别人 merge。</div>
+          <div>Source 默认选 Mainline（猜你想选）；Target 跟随 Source 推荐（Mainline→Preonline、Preonline→Online）。</div>
+          <div>手动改过 Source 后，Source 不再显示「猜你想选」，推荐改由 Target 承接。</div>
+          <div>支持手动改用户名帮别人 merge。</div>
           <div>Sync 范围由所选 Changelist 的文件列表决定，自动同步目标文件。</div>
         </div>
       }
@@ -393,8 +364,11 @@ export function P4MergePanel() {
               label="Source Workspace"
               value={sourceClient}
               onChange={(v) => {
-                // 用户手动切 Source = 重新表达 Merge 方向，Target 跟随新 Source 推荐
-                targetUserTouched.current = false
+                if (v === sourceClient) return
+                // 用户手动切 Source = 重新表达 Merge 方向：
+                //   Source 自身不再展示「猜你想选」，Target 交回自动推荐（跟随新 Source）
+                setSourceTouched(true)
+                setTargetTouched(false)
                 setSourceClient(v)
               }}
               workspaces={sortedWorkspaces}
@@ -420,7 +394,8 @@ export function P4MergePanel() {
               label="Target Workspace"
               value={targetClient}
               onChange={(v) => {
-                targetUserTouched.current = true
+                if (v === targetClient) return
+                setTargetTouched(true)
                 setTargetClient(v)
               }}
               workspaces={sortedWorkspaces}
@@ -557,7 +532,10 @@ function WorkspaceSelectField({
   loading: boolean
   placeholder: string
   streamHint?: string
-  /** 推荐的 workspace 名（猜你想选）；选中或在下拉里出现时显示标注 */
+  /**
+   * 推荐的 workspace 名（「猜你想选」）；空字符串表示该字段当前没有推荐，
+   * 此时选中项与下拉项都不打标（例如用户已手动选过 Source）.
+   */
   recommendedName?: string
   invalid?: boolean
   helperText?: string

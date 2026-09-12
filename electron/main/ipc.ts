@@ -18,6 +18,7 @@ import {
   buildPendingChangeDescription,
   buildResolveArgs,
   buildResolveOverrideArgs,
+  buildOpenedArgs,
   buildSyncArgs,
   computeMergePreview,
   createInitialPipeline,
@@ -1160,7 +1161,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     },
   )
 
-  /** p4 -c <client> opened -a <files...>：检查目标 workspace 是否有未提交修改（spec §15） */
+  /** p4 opened -C <client>：检查目标 workspace 是否有未提交修改（spec §15） */
   ipcMain.handle(
     'p4-merge:opened',
     async (_, payload: { client: string; files?: string[] }): Promise<{
@@ -1173,8 +1174,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       const client = payload?.client?.trim()
       if (!client) return { ok: false, error: '缺少 target workspace client' }
       try {
-        const args = ['-c', client, 'opened', '-a']
-        if (payload?.files && payload.files.length > 0) args.push(...payload.files)
+        // 参数构造见 buildOpenedArgs：`-C` 必须在子命令后，且不能用 `-a`（全服语义）
+        const args = buildOpenedArgs({ client, files: payload?.files })
         const out = await runCommand(p4, args, P4_MERGE_OPENED_TIMEOUT_MS)
         return { ok: true, opened: parseOpenedOutput(out) }
       } catch (e) {
@@ -1340,12 +1341,12 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       }
 
       try {
-        /* Step 1: Preflight —— 检查目标 workspace 已打开文件 */
+        /* Step 1: Preflight —— 检查目标 workspace 已打开文件（scope 说明见 p4-merge:opened） */
         setStep('preflight', { status: 'running', startedAt: Date.now() })
         pushLog('preflight', `Target: ${targetClient}`)
         const openedRes = await runP4Cancellable(
           p4,
-          ['-c', targetClient, 'opened', '-a'],
+          buildOpenedArgs({ client: targetClient }),
           { timeout: P4_MERGE_OPENED_TIMEOUT_MS, signal: controller.signal },
         )
         if (openedRes.aborted) {
@@ -1354,9 +1355,14 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         }
         const opened = parseOpenedOutput(openedRes.stdout)
         if (opened.length > 0) {
-          pushLog('preflight', `检测到 ${opened.length} 个已打开文件（未提交）`)
+          // 带上样例文件，便于区分「自己的 WIP」还是「别人的待提交」
+          const samples = opened
+            .slice(0, 3)
+            .map((f) => `${f.depotPath}${f.client ? ` @${f.client}` : ''}`)
+            .join('、')
+          pushLog('preflight', `检测到 ${opened.length} 个已打开文件（未提交）：${samples}${opened.length > 3 ? ' …' : ''}`)
           setStep('preflight', { status: 'failed', error: '目标 Workspace 存在未提交修改', endedAt: Date.now() })
-          return { ok: false, transactionId, error: '目标 Workspace 存在未提交修改，请先处理后再执行 Merge' }
+          return { ok: false, transactionId, error: `目标 Workspace 存在 ${opened.length} 个未提交文件，请先处理后再执行 Merge` }
         }
         pushLog('preflight', '目标 Workspace 干净')
         setStep('preflight', { status: 'success', endedAt: Date.now() })
@@ -1491,9 +1497,9 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           setStep('resolve', { status: 'success', endedAt: Date.now() })
         }
 
-        /* Step 6: Result —— 校验目标 Pending CL 文件 */
+        /* Step 6: Result —— 校验目标 Pending CL 文件（-c <changelist> 已限定范围，无需 -a） */
         setStep('result', { status: 'running', startedAt: Date.now() })
-        const verifyRes = await runP4Cancellable(p4, ['-c', targetClient, 'opened', '-c', String(targetChange), '-a'], {
+        const verifyRes = await runP4Cancellable(p4, buildOpenedArgs({ client: targetClient, change: targetChange }), {
           timeout: P4_MERGE_OPENED_TIMEOUT_MS,
           signal: controller.signal,
         })
