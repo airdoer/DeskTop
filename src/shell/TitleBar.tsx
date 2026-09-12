@@ -4,6 +4,7 @@ import {
   MaximizeIcon,
   MinimizeIcon,
   RestoreIcon,
+  SearchIcon,
 } from '@/components/ui/icons'
 import { Greeting, useGreeting } from '@/features/greeting/Greeting'
 import {
@@ -20,11 +21,14 @@ import { useSsoSession } from './ssoSessionContext'
  * TitleBar — 自定义标题栏（无原生 titleBarOverlay）.
  * 依据 docs/UI_DESIGN_SYSTEM.md §3/§4：Shell 统一提供标题栏。
  *
- * 布局：[拖拽区（问候语右对齐贴住 Persona） … 右侧按钮组：UserMenu | 最小化 | 最大化/还原 | 关闭]
+ * 布局：[快捷跳转入口] [拖拽区（问候语右对齐贴住 Persona）…] [按钮组：UserMenu | 最小化 | 最大化/还原 | 关闭]
  *   - 整条高度 36px，与 electron/main/index.ts 的 TITLE_BAR_HEIGHT 保持一致
- *   - 左侧至按钮组之间为窗口拖拽区（app-region-drag），双击自动最大化（Chromium 行为）
- *   - 按钮区与按钮均为 app-region-no-drag，确保可点击
+ *   - 除快捷跳转入口与按钮组外为窗口拖拽区（app-region-drag），双击自动最大化（Chromium 行为）
+ *   - 入口与按钮组均为 app-region-no-drag，确保可点击
  *   - 登录用户按钮位于最小化/最大化/关闭按钮的最左侧（用户要求）
+ *
+ * 快捷跳转入口（§22 Ctrl+K / §23 Command Palette）：常驻显示，不依赖 hover——
+ *   仅靠快捷键的功能缺少可发现入口，用户不会知道它存在。窗口收窄到 lg 以下时只留图标。
  *
  * 问候语（docs/GREETING_SPEC.md §3.1）：位于 User Persona 左侧，属被动辅助信息，
  *   不参与拖拽之外的交互——它随拖拽区一起拖动，不是按钮，不进入 Tab 顺序。
@@ -38,7 +42,12 @@ import { useSsoSession } from './ssoSessionContext'
 /** 与 electron/main/index.ts 的 TITLE_BAR_HEIGHT 保持一致 */
 const TITLE_BAR_HEIGHT = 36
 
-export function TitleBar() {
+interface TitleBarProps {
+  /** 打开快捷跳转浮层（状态由 AppShell 持有） */
+  onOpenQuickNav?: () => void
+}
+
+export function TitleBar({ onOpenQuickNav }: TitleBarProps) {
   const [maximized, setMaximized] = useState(false)
   const { session, loggedIn } = useSsoSession()
 
@@ -72,7 +81,12 @@ export function TitleBar() {
       className="app-region-drag flex items-stretch shrink-0 bg-surface-2 border-b border-border-subtle select-none"
       style={{ height: TITLE_BAR_HEIGHT }}
     >
-      {/* 拖拽区占满左侧至按钮组；问候语右对齐贴住 Persona */}
+      {/* 左侧：快捷跳转入口（常驻，保证功能可发现） */}
+      <div className="app-region-no-drag flex items-center pl-2">
+        <QuickNavTrigger onClick={onOpenQuickNav} />
+      </div>
+
+      {/* 拖拽区占满中间；问候语右对齐贴住 Persona */}
       <div className="flex-1 min-w-0 flex items-center justify-end">
         {greeting && (
           /*
@@ -109,6 +123,29 @@ export function TitleBar() {
         </WindowButton>
       </div>
     </div>
+  )
+}
+
+/**
+ * 快捷跳转入口：常驻的搜索样式按钮，点击等价于 Ctrl+K。
+ * 文案在 lg 以下隐藏（窗口 minWidth=960，md 断点永不生效），窄窗时退化为纯图标按钮。
+ */
+function QuickNavTrigger({ onClick }: { onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="快捷跳转（Ctrl+K）"
+      aria-label="快捷跳转"
+      aria-keyshortcuts="Control+K"
+      className="flex h-6 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-1 pl-2 pr-1.5 text-foreground-tertiary transition-colors hover:border-border hover:bg-surface-hover hover:text-foreground-secondary"
+    >
+      <SearchIcon size={13} aria-hidden />
+      <span className="hidden lg:inline text-[12px] leading-4">搜索或跳转</span>
+      <span className="hidden lg:inline-flex h-4 min-w-[16px] items-center justify-center rounded-sm border border-border bg-surface-3 px-1 text-[10px] font-medium leading-none">
+        Ctrl K
+      </span>
+    </button>
   )
 }
 

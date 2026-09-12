@@ -70,6 +70,19 @@ export function ToolsIcon(props: IconProps) {
   )
 }
 
+/**
+ * 搜索/放大镜：用于标题栏「搜索或跳转」入口与快捷跳转浮层的输入区。
+ * 圆形镜片 + 右下斜向手柄，是最不易与其他图标混淆的通用检索语义。
+ */
+export function SearchIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="10.8" cy="10.8" r="6.3" />
+      <path d="m15.4 15.4 4.1 4.1" />
+    </svg>
+  )
+}
+
 export function ChevronRightIcon(props: IconProps) {
   return (
     <svg {...base(props)}>
