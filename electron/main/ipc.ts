@@ -56,6 +56,12 @@ import {
 import { fetchRedmineIssues } from './redmine'
 import { normalizeWebsiteUrl, sanitizeWebsiteConfig, type WebsiteConfig } from './websites'
 import { startSsoLogin, readSsoSession, clearSsoSession, type SsoSession, type SsoResult } from './sso'
+import {
+  readAppConfigInfo,
+  resetAppConfig,
+  type AppConfigInfo,
+  type AppConfigResetResult,
+} from './appConfig'
 
 /*
  * IPC handlers for Desktop native capabilities.
@@ -586,6 +592,32 @@ async function collectIpv4(): Promise<{ primary: string; list: string[] }> {
 export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): void {
   // 预热网卡元数据缓存，避免首次打开主页时等待 PowerShell 查询（约 1-2s）
   if (process.platform === 'win32') void getNicMeta()
+
+  /*
+   * 应用信息：设置页「软件更新」面板展示当前版本，并以 packaged 决定是否放开更新入口。
+   * 更新依赖 electron-updater 读取 resources/app-update.yml，该文件仅打包后存在，
+   * 因此开发态必须隐藏更新入口，而不是等用户点击后收到一句英文报错。
+   */
+  ipcMain.handle('app:get-info', async (): Promise<{ version: string; packaged: boolean }> => ({
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+  }))
+
+  /*
+   * 本地配置目录：设置页展示「常用目录 / 常用网站等自定义配置落在哪里」，并提供一键重置。
+   * 清单与扫描/删除逻辑见 ./appConfig.ts（纯模块，可单测）；
+   * 这里只负责把 userData 目录传进去，不在 handler 内联文件操作。
+   *
+   * 每次调用都重新读磁盘：用户可能刚在资源管理器里手改了配置，
+   * 缓存一份快照会让面板显示过期状态。
+   */
+  ipcMain.handle('app:get-config-info', async (): Promise<AppConfigInfo> =>
+    readAppConfigInfo(app.getPath('userData')),
+  )
+
+  ipcMain.handle('app:reset-config', async (): Promise<AppConfigResetResult> =>
+    resetAppConfig(app.getPath('userData')),
+  )
 
   ipcMain.handle('system-info:get', async (_, forceRefresh = false): Promise<SystemInfo> => {
     if (forceRefresh) invalidateNicMetaCache()

@@ -4,6 +4,7 @@ import { TitleBar } from './TitleBar'
 import { LoginGate } from './LoginGate'
 import { SsoSessionProvider, useSsoSession } from './ssoSessionContext'
 import { ToastContainer } from '@/components/feedback/Toast'
+import { useStartupUpdateCheck } from '@/features/app-update/useStartupUpdateCheck'
 import { QUICK_NAV_ENTRIES, type QuickNavEntry } from '@/features/quick-nav/entries'
 import { QuickNavPalette } from '@/features/quick-nav/QuickNavPalette'
 import { useQuickNavHotkey } from '@/features/quick-nav/useQuickNavHotkey'
@@ -59,6 +60,9 @@ function AppShellContent({ pages, defaultRoute = 'home' }: AppShellProps) {
   }, [])
 
   useQuickNavHotkey(toggleQuickNav)
+
+  // 登录后延迟静默检查更新（仅安装版生效）；LoginGate 期间不打扰用户
+  useStartupUpdateCheck(!loading && loggedIn)
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-surface-2 text-foreground">
