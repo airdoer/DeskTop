@@ -1,5 +1,17 @@
-# pnpm v12+ reads build-script allowlist from here instead of package.json
-# https://pnpm.io/settings#onlybuiltdependencies
+# pnpm v12+ 的构建脚本白名单（allowBuilds 取布尔值）。
+# 与下方 onlyBuiltDependencies 保持同一集合：允许的置 true，其余显式置 false
+# （不写会触发 ERR_PNPM_IGNORED_BUILDS，pnpm install / pnpm run 都会被拦住）。
+allowBuilds:
+  '@parcel/watcher': true
+  bufferutil: true
+  canvas: false
+  edgedriver: false
+  electron-winstaller: true
+  esbuild: true
+  geckodriver: false
+  msw: false
+  utf-8-validate: true
+
 onlyBuiltDependencies:
   - esbuild
   - '@parcel/watcher'
