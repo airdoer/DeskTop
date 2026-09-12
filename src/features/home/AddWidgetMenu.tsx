@@ -74,7 +74,13 @@ export function AddWidgetMenu({ available, onAdd }: AddWidgetMenuProps) {
                 }}
                 className="flex h-8 w-full items-center gap-2 px-3 text-[13px] text-foreground-secondary transition-colors hover:bg-surface-hover hover:text-foreground"
               >
-                <widget.icon size={14} className="shrink-0 text-foreground-tertiary" aria-hidden />
+                {/* 图标带识别色：与侧边栏、「已添加」的组件标题对得上号 */}
+                <widget.icon
+                  size={14}
+                  className="shrink-0"
+                  style={{ color: widget.iconColor }}
+                  aria-hidden
+                />
                 <span className="truncate">{widget.label}</span>
               </button>
             ))

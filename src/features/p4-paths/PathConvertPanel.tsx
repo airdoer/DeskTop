@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Panel } from '@/components/layout/Panel'
+import { NavIcon } from '@/shell/NavIcon'
 import { AppButton } from '@/components/ui/AppButton'
 import { AppInput } from '@/components/ui/AppInput'
 import {
@@ -8,7 +9,6 @@ import {
   FolderSolidIcon,
   P4VWindowIcon,
   RefreshIcon,
-  SwapIcon,
   VersionControlIcon,
 } from '@/components/ui/icons'
 import { FOLDER_YELLOW, PERFORCE_BLUE } from '@/components/ui/brandColors'
@@ -137,7 +137,7 @@ export function PathConvertPanel() {
   return (
     <Panel
       title="路径转换"
-      icon={<SwapIcon size={14} />}
+      icon={<NavIcon id="p4-path" />}
       help={help}
       actions={
         <AppButton

@@ -178,9 +178,11 @@ export function QuickNavPalette({ open, entries, onClose, onSelect }: QuickNavPa
                     active ? 'bg-surface-active' : ''
                   }`}
                 >
+                  {/* 图标沿用侧边栏的识别色，保证「搜到的条目」与「点进去的页签」对得上号 */}
                   <entry.icon
                     size={15}
-                    className="shrink-0 text-foreground-secondary"
+                    className="shrink-0"
+                    style={{ color: entry.iconColor }}
                     aria-hidden
                   />
                   <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">

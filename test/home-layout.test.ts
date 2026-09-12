@@ -14,7 +14,7 @@ import {
   findHomeWidget,
   type HomeWidgetId,
 } from '@/features/home/homeWidgets'
-import { FOOTER_NAV_ITEM, NAV_ITEMS } from '@/shell/navigation'
+import { collectNavLeaves, FOOTER_NAV_ITEM, NAV_ITEMS } from '@/shell/navigation'
 
 /*
  * 主页「可拼装布局」单测：解析容错（脏数据不能让主页白屏）、增删、可用列表、注册表完整性。
@@ -149,6 +149,19 @@ describe('主页组件注册表', () => {
       expect(widget.label.length).toBeGreaterThan(0)
       expect(typeof widget.render).toBe('function')
     }
+  })
+
+  it('每个组件都有图标识别色（「添加组件」菜单里靠它认页签）', () => {
+    for (const widget of HOME_WIDGETS) {
+      expect(widget.iconColor).toMatch(/^#[0-9A-Fa-f]{6}$/)
+    }
+  })
+
+  it('组件元数据与侧边栏页签逐项同源（标题 / 图标 / 识别色不允许各写一份）', () => {
+    const navLeaves = collectNavLeaves(NAV_ITEMS).filter((leaf) => leaf.id !== 'home')
+    expect(HOME_WIDGETS.map((w) => [w.id, w.label, w.icon, w.iconColor])).toEqual(
+      navLeaves.map((leaf) => [leaf.id, leaf.label, leaf.icon, leaf.iconColor]),
+    )
   })
 
   it('默认布局非空且全部合法（老用户升级后主页不应空白）', () => {

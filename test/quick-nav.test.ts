@@ -252,15 +252,16 @@ describe('buildQuickNavEntries', () => {
    * （UI_DESIGN_SYSTEM §9），故这里用一棵合成菜单树锁定分组的拍平规则。
    */
   const tree: NavItem[] = [
-    { type: 'leaf', id: 'home', label: '主页', icon: () => null },
+    { type: 'leaf', id: 'home', label: '主页', icon: () => null, iconColor: '#6D28D9' },
     {
       type: 'group',
       id: 'g',
       label: '分组示例',
       icon: () => null,
+      iconColor: '#2E8FCC',
       children: [
-        { id: 'p4-merge', label: 'p4merge', icon: () => null },
-        { id: 'p4-path', label: '路径转换', icon: () => null },
+        { id: 'p4-merge', label: 'p4merge', icon: () => null, iconColor: '#1F7BB8' },
+        { id: 'p4-path', label: '路径转换', icon: () => null, iconColor: '#0F8A8A' },
       ],
     },
   ]
@@ -310,6 +311,17 @@ describe('QUICK_NAV_ENTRIES（真实导航配置）', () => {
       expect(entry.label.length).toBeGreaterThan(0)
       expect(typeof entry.icon).toBe('function')
     }
+  })
+
+  it('每个条目都带合法的图标识别色（浮层图标与侧边栏同色）', () => {
+    for (const entry of QUICK_NAV_ENTRIES) {
+      expect(entry.iconColor).toMatch(/^#[0-9A-Fa-f]{6}$/)
+    }
+  })
+
+  it('识别色两两不同（重复就失去区分页签的意义）', () => {
+    const colors = QUICK_NAV_ENTRIES.map((entry) => entry.iconColor)
+    expect(new Set(colors).size).toBe(colors.length)
   })
 
   it('取消二级分组后，所有条目都是顶层项（crumb 为空）', () => {

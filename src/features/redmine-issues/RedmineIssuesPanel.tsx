@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Panel } from '@/components/layout/Panel'
 import { EmptyState } from '@/components/layout/EmptyState'
 import { AppButton } from '@/components/ui/AppButton'
-import { CopyIcon, ExternalLinkIcon, RefreshIcon, TicketSolidIcon } from '@/components/ui/icons'
+import { CopyIcon, ExternalLinkIcon, RefreshIcon } from '@/components/ui/icons'
 import { REDMINE_RED } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import {
@@ -18,6 +18,7 @@ import {
 } from '@/services/redmineIssues'
 import { PANEL_COLLAPSED_KEYS } from '@/services/uiPreferences'
 import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
+import { NavIcon } from '@/shell/NavIcon'
 import { useSsoSession } from '@/shell/ssoSessionContext'
 
 /*
@@ -94,7 +95,7 @@ export function RedmineIssuesPanel() {
   return (
     <Panel
       title="Redmine 单子"
-      icon={<TicketSolidIcon size={14} style={{ color: REDMINE_RED }} />}
+      icon={<NavIcon id="redmine" />}
       help={
         <div className="text-xs leading-5">
           <div>过滤：{userName || '未登录'} · 状态=进行中 · 目标版本≠#{EXCLUDE_FIXED_VERSION_ID}</div>

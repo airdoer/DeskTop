@@ -29,6 +29,12 @@ import {
  *
  * 底部固定区（不随 nav 滚动）：设置 → 收起/展开侧边栏 → 版本号。
  *   「设置」不是主导航页签，固定在此处（FOOTER_NAV_ITEM），高亮规则与主导航项一致。
+ *
+ * 图标识别色（item.iconColor，来自 brandColors.NAV_ICON_COLORS）：
+ *   以 inline style 落在图标自身，**不随激活态变色**——激活态靠 bg-surface-active +
+ *   font-medium 表达。这样收起成图标列（rail）时仍能靠颜色区分页签，
+ *   否则 rail 里所有激活项都会变成同一个 primary 蓝，反而失去识别度。
+ *   文字仍走 text-* 类，激活时为主色，保证「当前在哪一页」一眼可见。
  */
 
 interface SidebarProps {
@@ -198,7 +204,7 @@ function LeafItem({
         title={collapsed ? item.label : undefined}
         aria-label={collapsed ? item.label : undefined}
       >
-        <item.icon size={16} />
+        <item.icon size={16} style={{ color: item.iconColor }} />
         {!collapsed && <span className="flex-1 text-left truncate">{item.label}</span>}
       </button>
     </li>
@@ -232,7 +238,7 @@ function GroupItem({
         title={collapsed ? item.label : undefined}
         aria-label={collapsed ? item.label : undefined}
       >
-        <item.icon size={16} />
+        <item.icon size={16} style={{ color: item.iconColor }} />
         {!collapsed && (
           <>
             <span className="flex-1 text-left truncate">{item.label}</span>
@@ -258,7 +264,10 @@ function GroupItem({
                   title={collapsed ? child.label : undefined}
                   aria-label={collapsed ? child.label : undefined}
                 >
-                  <child.icon size={collapsed ? 14 : 15} />
+                  <child.icon
+                    size={collapsed ? 14 : 15}
+                    style={{ color: child.iconColor }}
+                  />
                   {!collapsed && <span className="flex-1 text-left truncate">{child.label}</span>}
                 </button>
               </li>

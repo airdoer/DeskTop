@@ -2,14 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Panel } from '@/components/layout/Panel'
 import { AppButton } from '@/components/ui/AppButton'
 import { AppInput } from '@/components/ui/AppInput'
-import {
-  ChevronDownIcon,
-  FolderOpenIcon,
-  RefreshIcon,
-  VersionControlIcon,
-} from '@/components/ui/icons'
-import { PERFORCE_BLUE } from '@/components/ui/brandColors'
+import { ChevronDownIcon, FolderOpenIcon, RefreshIcon } from '@/components/ui/icons'
 import { toast } from '@/components/feedback/Toast'
+import { NavIcon } from '@/shell/NavIcon'
 import { MergePipeline } from './MergePipeline'
 import { MergeFileTable, MergePreviewSummary } from './MergeFileTable'
 import { ChangelistList } from './ChangelistList'
@@ -334,7 +329,7 @@ export function P4MergePanel() {
   return (
     <Panel
       title="Cross Branch Merge"
-      icon={<VersionControlIcon size={14} style={{ color: PERFORCE_BLUE }} />}
+      icon={<NavIcon id="p4-merge" />}
       help={
         <div className="text-xs leading-5">
           <div>选择源/目标 Workspace → 加载 Changelist → 预览文件映射 → 执行 Merge（不自动 Submit）。</div>

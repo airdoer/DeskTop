@@ -1,15 +1,5 @@
-import type { ComponentType, ReactNode } from 'react'
-import {
-  BranchIcon,
-  FolderIcon,
-  GlobeIcon,
-  MergeIcon,
-  MonitorIcon,
-  SwapIcon,
-  TicketIcon,
-  type IconProps,
-} from '@/components/ui/icons'
-import type { RouteId } from '@/shell/navigation'
+import type { ReactNode } from 'react'
+import { NAV_ITEMS, collectNavLeaves, type NavLeafEntry, type RouteId } from '@/shell/navigation'
 import { SystemInfoPanel } from '@/features/system-info/SystemInfoPanel'
 import { QuickDirectoriesPanel } from '@/features/quick-directories/QuickDirectoriesPanel'
 import { P4WorkspacesPanel } from '@/features/p4-workspaces/P4WorkspacesPanel'
@@ -26,64 +16,44 @@ import { PathConvertPanel } from '@/features/p4-paths/PathConvertPanel'
  *   即 id 与 RouteId 完全一致：这样「主页里能拼的组件」与「侧边栏能进的页签」永远同集合，
  *   新增一个功能页签时会自动出现在「添加组件」菜单里（由 test/home-layout.test.ts 强制覆盖）。
  *
- * 注意：本文件只描述「有哪些组件」，布局（顺序/取舍）由 services/homeLayout.ts 管理并持久化。
+ * 本文件只负责「id → 渲染哪个面板」这一件导航层无法知道的事；
+ *   标题 / 图标 / 识别色一律从 navigation.ts 取（collectNavLeaves），不在此重复声明，
+ *   否则「添加组件」菜单里的名字与图标会和侧边栏漂移。
+ *
+ * 注意：布局（顺序/取舍）由 services/homeLayout.ts 管理并持久化，本文件不参与。
  */
 
 /** 可作为主页组件的页签：除主页自身与设置之外的全部功能页 */
 export type HomeWidgetId = Exclude<RouteId, 'home' | 'settings'>
 
-export interface HomeWidget {
+export interface HomeWidget extends NavLeafEntry {
   id: HomeWidgetId
-  label: string
-  icon: ComponentType<IconProps>
   /** 渲染组件本体。面板自带标题/操作，主页只负责外层排布与编辑态装饰 */
   render: () => ReactNode
 }
 
-export const HOME_WIDGETS: HomeWidget[] = [
-  {
-    id: 'system-info',
-    label: '系统信息',
-    icon: MonitorIcon,
-    render: () => <SystemInfoPanel />,
-  },
-  {
-    id: 'quick-dirs',
-    label: '常用目录',
-    icon: FolderIcon,
-    render: () => <QuickDirectoriesPanel />,
-  },
-  {
-    id: 'p4-workspaces',
-    label: 'P4 工作区',
-    icon: BranchIcon,
-    render: () => <P4WorkspacesPanel />,
-  },
-  {
-    id: 'redmine',
-    label: 'Redmine 单子',
-    icon: TicketIcon,
-    render: () => <RedmineIssuesPanel />,
-  },
-  {
-    id: 'websites',
-    label: '常用网站',
-    icon: GlobeIcon,
-    render: () => <WebsitesPanel />,
-  },
-  {
-    id: 'p4-merge',
-    label: 'p4merge',
-    icon: MergeIcon,
-    render: () => <P4MergePanel />,
-  },
-  {
-    id: 'p4-path',
-    label: '路径转换',
-    icon: SwapIcon,
-    render: () => <PathConvertPanel />,
-  },
-]
+/*
+ * id → 面板渲染器。用 Record<HomeWidgetId, ...> 声明：
+ *   新增一个路由却忘了注册渲染器会在编译期直接报错，而不是运行时静默少一块。
+ */
+const WIDGET_RENDERERS: Record<HomeWidgetId, () => ReactNode> = {
+  'system-info': () => <SystemInfoPanel />,
+  'quick-dirs': () => <QuickDirectoriesPanel />,
+  'p4-workspaces': () => <P4WorkspacesPanel />,
+  redmine: () => <RedmineIssuesPanel />,
+  websites: () => <WebsitesPanel />,
+  'p4-merge': () => <P4MergePanel />,
+  'p4-path': () => <PathConvertPanel />,
+}
+
+function isHomeWidgetId(id: RouteId): id is HomeWidgetId {
+  return id !== 'home' && id !== 'settings'
+}
+
+/** 顺序沿用侧边栏声明顺序，使「添加组件」菜单的排序与侧边栏一致 */
+export const HOME_WIDGETS: HomeWidget[] = collectNavLeaves(NAV_ITEMS)
+  .filter((leaf): leaf is NavLeafEntry & { id: HomeWidgetId } => isHomeWidgetId(leaf.id))
+  .map((leaf) => ({ ...leaf, render: WIDGET_RENDERERS[leaf.id] }))
 
 export const HOME_WIDGET_IDS: HomeWidgetId[] = HOME_WIDGETS.map((widget) => widget.id)
 

@@ -12,7 +12,6 @@ import {
   P4VWindowIcon,
   RefreshIcon,
   StarIcon,
-  VersionControlIcon,
 } from '@/components/ui/icons'
 import { PERFORCE_BLUE, STAR_AMBER } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
@@ -50,6 +49,7 @@ import {
   type ViewMode,
 } from '@/services/uiPreferences'
 import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
+import { NavIcon } from '@/shell/NavIcon'
 
 /*
  * P4WorkspacesPanel — Business Feature：展示本机的 Perforce 工作区.
@@ -371,7 +371,7 @@ export function P4WorkspacesPanel() {
   return (
     <Panel
       title="P4 工作区"
-      icon={<VersionControlIcon size={14} style={{ color: PERFORCE_BLUE }} />}
+      icon={<NavIcon id="p4-workspaces" />}
       help={help}
       collapsible
       collapsed={collapsed}

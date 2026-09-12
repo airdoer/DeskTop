@@ -7,12 +7,10 @@ import { ColorSwatches } from '@/components/ui/ColorSwatches'
 import {
   FolderIcon,
   FolderOpenIcon,
-  FolderSolidIcon,
   PencilIcon,
   PlusIcon,
   TrashIcon,
 } from '@/components/ui/icons'
-import { FOLDER_YELLOW } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import {
   deriveDirectoryBadge,
@@ -36,6 +34,7 @@ import {
   type QuickDirsViewMode,
 } from '@/services/uiPreferences'
 import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
+import { NavIcon } from '@/shell/NavIcon'
 
 /*
  * QuickDirectoriesPanel — Business Feature：管理最多 MAX_QUICK_DIRECTORIES 个
@@ -377,7 +376,7 @@ export function QuickDirectoriesPanel() {
   return (
     <Panel
       title="常用目录"
-      icon={<FolderSolidIcon size={14} style={{ color: FOLDER_YELLOW }} />}
+      icon={<NavIcon id="quick-dirs" />}
       help={`最多 ${MAX_QUICK_DIRECTORIES} 个目录，点击快速跳转；支持拖入文件夹添加、拖动条目排序（Alt+↑/↓）`}
       collapsible
       collapsed={collapsed}

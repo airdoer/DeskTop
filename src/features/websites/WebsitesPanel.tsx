@@ -9,12 +9,10 @@ import {
   EyeIcon,
   EyeOffIcon,
   GlobeIcon,
-  GlobeSolidIcon,
   PencilIcon,
   PlusIcon,
   TrashIcon,
 } from '@/components/ui/icons'
-import { WEBSITE_BLUE } from '@/components/ui/brandColors'
 import { toast } from '@/components/feedback/Toast'
 import { deriveDirectoryBadge, deriveDirectoryColor, moveItem } from '@/services/quickDirectories'
 import {
@@ -40,6 +38,7 @@ import {
   saveViewMode,
   type ViewMode,
 } from '@/services/uiPreferences'
+import { NavIcon } from '@/shell/NavIcon'
 
 /*
  * WebsitesPanel — Business Feature：常用内网站点快捷入口.
@@ -326,7 +325,7 @@ export function WebsitesPanel() {
   return (
     <Panel
       title="常用网站"
-      icon={<GlobeSolidIcon size={14} style={{ color: WEBSITE_BLUE }} />}
+      icon={<NavIcon id="websites" />}
       help="内置站点可隐藏，自定义站点可增删改；点击条目在系统默认浏览器中打开，拖动条目可调整顺序（Alt+↑/↓ 亦可）"
       actions={
         <>

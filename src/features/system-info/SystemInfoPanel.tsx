@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Panel } from '@/components/layout/Panel'
 import { AppButton } from '@/components/ui/AppButton'
-import { CheckIcon, CloseIcon, CopyIcon, MonitorSolidIcon, RefreshIcon } from '@/components/ui/icons'
-import { WINDOWS_BLUE } from '@/components/ui/brandColors'
+import { CheckIcon, CloseIcon, CopyIcon, RefreshIcon } from '@/components/ui/icons'
+import { NavIcon } from '@/shell/NavIcon'
 import { toast } from '@/components/feedback/Toast'
 import {
   getEncodingStatus,
@@ -93,7 +93,7 @@ export function SystemInfoPanel() {
   return (
     <Panel
       title="系统信息"
-      icon={<MonitorSolidIcon size={14} style={{ color: WINDOWS_BLUE }} />}
+      icon={<NavIcon id="system-info" />}
       help="当前主机网络标识与系统编码"
       collapsible
       collapsed={collapsed}
