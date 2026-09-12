@@ -268,9 +268,12 @@ export function P4MergePanel() {
           toast.error(`p4 describe 失败：${desc.error ?? '未知错误'}`)
           return
         }
-        const fullDescription = desc.description ?? ''
+        const rawDescription = desc.description ?? ''
+        // describe 返回的描述可能含 \n（多行），统一合并为单行空格分隔，
+        //   与 -ztag changes -L 的单行 desc 保持一致，避免回填后行高跳动 / Redmine 单号数量变化.
+        const fullDescription = rawDescription.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
         setDescribe({ change: desc.change ?? change, description: fullDescription, files: desc.files })
-        // 回填完整多行描述到 changes 列表（-ztag changes 只给首行，describe 给全文）
+        // 回填完整描述到 changes 列表（与列表加载时 -ztag changes -L 同样单行）
         setChanges((prev) =>
           prev.map((c) => (c.change === change ? { ...c, description: fullDescription || c.description } : c)),
         )
