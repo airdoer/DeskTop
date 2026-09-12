@@ -20,9 +20,21 @@ let electronProc: ReturnType<typeof spawn> | null = null
 function spawnElectron(root: string) {
   const require = createRequire(path.join(root, 'package.json'))
   const electronPath = require('electron')
-  const entry = path.join(root, 'dist-electron/main/index.js')
   electronProc?.kill()
-  electronProc = spawn(electronPath, [entry, '--no-sandbox'], {
+  /*
+   * 必须传「项目根目录」而不是入口文件的绝对路径。
+   * Electron 以目录启动时把该目录当作 app path，读得到 package.json，
+   * 于是 app.getName() 取 productName(DeskTop)、app.getVersion() 取 version；
+   * 若传 dist-electron/main/index.js，app path 变成 dist-electron/main
+   * —— 那里没有 package.json，两个 API 都会静默回退：
+   *   app.getName()    → "Electron"（userData 跟着落到 %APPDATA%\Electron）
+   *   app.getVersion() → Electron 自身版本（实测 42.11.2）
+   * 结果是开发态与打包态表现不一致（打包后 productName / version 才生效）。
+   * 实测对照：目录启动 NAME=productName、VERSION=package.json 的 version、
+   * USERDATA=%APPDATA%\<productName>；入口文件启动则得到 Electron / 42.11.2 /
+   * %APPDATA%\Electron。入口仍由 package.json 的 main 字段解析，指向同一个文件。
+   */
+  electronProc = spawn(electronPath, [root, '--no-sandbox'], {
     cwd: root,
     stdio: 'ignore',
     detached: true,
