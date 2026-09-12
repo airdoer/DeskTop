@@ -103,6 +103,47 @@ export async function saveBooleanPref(key: string, value: boolean): Promise<void
   }
 }
 
+/* ---------- 通用字符串偏好 ---------- */
+
+/**
+ * 读取任意 string 偏好：非字符串（含缺失）返回 undefined，
+ * 让调用方区分「从未配置」与「配置成空值」。
+ */
+export async function readStringPref(key: string): Promise<string | undefined> {
+  try {
+    const prefs = await getUiPreferences()
+    const value = prefs[key]
+    return typeof value === 'string' ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export async function saveStringPref(key: string, value: string): Promise<void> {
+  try {
+    await setUiPreferences({ [key]: value })
+  } catch {
+    /* 持久化失败不影响本次会话内的改动 */
+  }
+}
+
+/* ---------- 主页可拼装布局 ---------- */
+
+/**
+ * 主页组件布局：逗号分隔的组件 id 串（解析与容错见 services/homeLayout.ts）。
+ * 存字符串而非数组，是为了复用 uiPreferences 的标量偏好通道
+ * （Main Process 只接受 string | number | boolean，见 UI_PREF_MAX_VALUE_LENGTH）。
+ */
+export const HOME_LAYOUT_KEY = 'home.widgets'
+
+export function readHomeLayoutRaw(): Promise<string | undefined> {
+  return readStringPref(HOME_LAYOUT_KEY)
+}
+
+export function saveHomeLayoutRaw(value: string): Promise<void> {
+  return saveStringPref(HOME_LAYOUT_KEY, value)
+}
+
 /* ---------- 侧边栏折叠 ---------- */
 
 /** 侧边栏是否收起为图标列（true=收起） */

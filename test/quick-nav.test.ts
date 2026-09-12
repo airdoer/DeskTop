@@ -10,7 +10,7 @@ import {
   type QuickNavCandidate,
 } from '@/services/quickNav'
 import { buildQuickNavEntries, QUICK_NAV_ENTRIES } from '@/features/quick-nav/entries'
-import { NAV_ITEMS, type NavItem, type RouteId } from '@/shell/navigation'
+import { FOOTER_NAV_ITEM, NAV_ITEMS, type NavItem, type RouteId } from '@/shell/navigation'
 
 /*
  * 快捷跳转单测：覆盖 docs/UI_DESIGN_SYSTEM.md §22（Ctrl+K / Esc / Enter）与 §23（Command Palette）。
@@ -247,16 +247,20 @@ describe('isQuickNavHotkey（§22 Ctrl+K）', () => {
 /* ---------- 条目构建 ---------- */
 
 describe('buildQuickNavEntries', () => {
+  /*
+   * 当前导航已取消二级分组（NAV_ITEMS 全为叶子），但 NavGroup 仍是 Shell 的通用能力
+   * （UI_DESIGN_SYSTEM §9），故这里用一棵合成菜单树锁定分组的拍平规则。
+   */
   const tree: NavItem[] = [
     { type: 'leaf', id: 'home', label: '主页', icon: () => null },
     {
       type: 'group',
       id: 'g',
-      label: 'p4工具',
+      label: '分组示例',
       icon: () => null,
       children: [
-        { id: 'p4-update', label: 'p4更新', icon: () => null },
         { id: 'p4-merge', label: 'p4merge', icon: () => null },
+        { id: 'p4-path', label: '路径转换', icon: () => null },
       ],
     },
   ]
@@ -264,34 +268,34 @@ describe('buildQuickNavEntries', () => {
   it('只收录叶子节点（分组本身没有页面，不可跳转）', () => {
     expect(buildQuickNavEntries(tree).map((e) => e.id)).toEqual([
       'home',
-      'p4-update',
       'p4-merge',
+      'p4-path',
     ])
   })
 
   it('顶层条目 crumb 为空，子项 crumb 为所属分组名', () => {
     const entries = buildQuickNavEntries(tree)
     expect(entries[0].crumb).toBe('')
-    expect(entries[1].crumb).toBe('p4工具')
+    expect(entries[1].crumb).toBe('分组示例')
   })
 
   it('keywords 含路由 id 与标题，便于用英文命中中文菜单', () => {
     const entries = buildQuickNavEntries(tree)
-    expect(entries[1].keywords).toContain('p4-update')
-    expect(entries[1].keywords).toContain('p4更新')
+    expect(entries[1].keywords).toContain('p4-merge')
+    expect(entries[1].keywords).toContain('p4merge')
   })
 })
 
 describe('QUICK_NAV_ENTRIES（真实导航配置）', () => {
-  /** 从 NAV_ITEMS 取出所有真实路由 id */
+  /** 从菜单树取出所有真实路由 id */
   function collectRouteIds(items: readonly NavItem[]): RouteId[] {
     return items.flatMap((item) =>
       item.type === 'leaf' ? [item.id] : item.children.map((child) => child.id),
     )
   }
 
-  it('侧边栏每个可跳转路由都有对应条目（不漏路由）', () => {
-    const expected = collectRouteIds(NAV_ITEMS).sort()
+  it('侧边栏每个可跳转路由都有对应条目（不漏路由，含固定在底部的设置）', () => {
+    const expected = collectRouteIds([...NAV_ITEMS, FOOTER_NAV_ITEM]).sort()
     const actual = QUICK_NAV_ENTRIES.map((entry) => entry.id).sort()
     expect(actual).toEqual(expected)
   })
@@ -308,9 +312,19 @@ describe('QUICK_NAV_ENTRIES（真实导航配置）', () => {
     }
   })
 
-  it('搜索「p4工具」能列出其下全部子项', () => {
-    const results = searchQuickNav(QUICK_NAV_ENTRIES, 'p4工具')
-    expect(results.length).toBeGreaterThan(0)
-    expect(results.every((r) => r.item.crumb === 'p4工具')).toBe(true)
+  it('取消二级分组后，所有条目都是顶层项（crumb 为空）', () => {
+    expect(QUICK_NAV_ENTRIES.every((entry) => entry.crumb === '')).toBe(true)
+  })
+
+  it('设置虽不在主导航里，仍可被搜到并跳转', () => {
+    const results = searchQuickNav(QUICK_NAV_ENTRIES, '设置')
+    expect(results.map((r) => r.item.id)).toContain('settings')
+  })
+
+  it('新增的独立页签都在条目里（系统信息 / 常用目录 / P4 工作区 / Redmine）', () => {
+    const ids = QUICK_NAV_ENTRIES.map((entry) => entry.id)
+    for (const id of ['system-info', 'quick-dirs', 'p4-workspaces', 'redmine']) {
+      expect(ids).toContain(id)
+    }
   })
 })

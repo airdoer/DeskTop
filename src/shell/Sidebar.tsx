@@ -9,6 +9,7 @@ import {
 import { readSidebarCollapsed, saveSidebarCollapsed } from '@/services/uiPreferences'
 import {
   DEFAULT_EXPANDED_GROUPS,
+  FOOTER_NAV_ITEM,
   NAV_ITEMS,
   ROUTE_PARENT,
   type NavGroup,
@@ -25,6 +26,9 @@ import {
  *
  * 支持整体收起为图标列（rail）：宽度 224px → 56px，只保留图标，label 走原生 title
  *   提示（nav 是 overflow-y-auto 容器，自定义气泡会被裁剪）。收起状态经 ui-prefs 持久化。
+ *
+ * 底部固定区（不随 nav 滚动）：设置 → 收起/展开侧边栏 → 版本号。
+ *   「设置」不是主导航页签，固定在此处（FOOTER_NAV_ITEM），高亮规则与主导航项一致。
  */
 
 interface SidebarProps {
@@ -107,6 +111,17 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
         </ul>
       </nav>
 
+      {/* 固定在底部：设置 → 收起侧边栏 → 版本号（设置不再是主导航页签，见 navigation.ts） */}
+      <div className="px-2 pb-1.5">
+        <ul className="flex flex-col gap-0.5">
+          <LeafItem
+            item={FOOTER_NAV_ITEM}
+            collapsed={collapsed}
+            active={active === FOOTER_NAV_ITEM.id}
+            onClick={() => onNavigate(FOOTER_NAV_ITEM.id)}
+          />
+        </ul>
+      </div>
       <CollapseToggle collapsed={collapsed} onToggle={toggleCollapsed} />
       <Footer collapsed={collapsed} />
     </aside>

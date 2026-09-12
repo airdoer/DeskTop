@@ -207,6 +207,58 @@ export function SwapIcon(props: IconProps) {
   )
 }
 
+/**
+ * 跨分支 Merge：两条输入线汇合成一条输出线（Y 形），
+ * 语义对应「Source Changelist → Target Workspace」的合并方向。
+ */
+export function MergeIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M3 7h5l5 5" />
+      <path d="M3 17h5l5-5" />
+      <path d="M13 12h5" />
+      <path d="m18 9 3 3-3 3" />
+    </svg>
+  )
+}
+
+/** 上移：垂直向上箭头。用于列表/组件调序，与 Chevron 的「折叠」语义区分 */
+export function ArrowUpIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 19V5" />
+      <path d="m6 11 6-6 6 6" />
+    </svg>
+  )
+}
+
+/** 下移：垂直向下箭头 */
+export function ArrowDownIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 5v14" />
+      <path d="m6 13 6 6 6-6" />
+    </svg>
+  )
+}
+
+/**
+ * 拖拽把手：两列共六个圆点，是桌面软件里「可拖动排序」的通用语汇。
+ * 用实心圆点（fill）而非描边，小尺寸下比线性更清晰。
+ */
+export function DragHandleIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="9" cy="6" r="1.15" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="6" r="1.15" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="12" r="1.15" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="12" r="1.15" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="18" r="1.15" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="18" r="1.15" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 /** 侧边栏收起（内容区向左展开） */
 export function SidebarCollapseIcon(props: IconProps) {
   return (
@@ -438,6 +490,19 @@ export function GlobeSolidIcon(props: IconProps) {
         strokeWidth={1.3}
         strokeLinecap="round"
       />
+    </svg>
+  )
+}
+
+/**
+ * 线性工单/票据：用于「Redmine 单子」导航项。
+ * 与 TicketSolidIcon 同一套「圆角票据 + 左右缺口 + 左侧撕线」形语言，改为描边以匹配导航栏风格。
+ */
+export function TicketIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 5.5a1.5 1.5 0 0 1 1.5-1.5h13A1.5 1.5 0 0 1 20 5.5v2a1 1 0 0 0 0 2v5a1 1 0 0 0 0 2v2a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-2a1 1 0 0 0 0-2v-5a1 1 0 0 0 0-2Z" />
+      <path d="M10 4v16" />
     </svg>
   )
 }

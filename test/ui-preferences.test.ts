@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 // 与既有测试一致：vitest 未配置 @/ 别名，用相对路径引用
 import {
+  HOME_LAYOUT_KEY,
   normalizeViewMode,
   QUICK_DIRS_VIEW_KEY,
   readBooleanPref,
@@ -24,6 +25,7 @@ describe('normalizeViewMode', () => {
 
   it('偏好键名固定，避免与业务数据键冲突', () => {
     expect(QUICK_DIRS_VIEW_KEY).toBe('quick-dirs.view')
+    expect(HOME_LAYOUT_KEY).toBe('home.widgets')
   })
 })
 
