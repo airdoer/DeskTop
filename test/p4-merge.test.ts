@@ -324,27 +324,29 @@ describe('computeMergePreview', () => {
 })
 
 describe('buildIntegrateArgs', () => {
-  it('构造 p4 -c <client> integrate -c <targetChange> <source>#<rev> <target>（单文件）', () => {
+  it('构造 p4 -c <client> integrate -c <targetChange> <source>@<cl-1>,<cl> <target>（changelist range 限定单次提交）', () => {
     const args = buildIntegrateArgs({
       targetClient: 'chenzhixu_C7_Weekly',
       targetChange: '2150001',
+      sourceChange: 2140784,
       file: {
         sourcePath: '//C7/Development/Mainline/Client/A.lua',
         targetPath: '//C7/Development/Weekly/Client/A.lua',
-        sourceRevision: 1,
       },
     })
     expect(args).toEqual([
       '-c', 'chenzhixu_C7_Weekly',
       'integrate', '-c', '2150001',
-      '//C7/Development/Mainline/Client/A.lua#1', '//C7/Development/Weekly/Client/A.lua',
+      '//C7/Development/Mainline/Client/A.lua@2140783,2140784', '//C7/Development/Weekly/Client/A.lua',
     ])
   })
 
-  it('sourceRevision 缺省时不追加 #rev', () => {
+  it('changelist range 限定：只集成 sourceChange 这一次提交的修改，不连带历史未集成的 revisions', () => {
+    // 即便 sourceChange-1 不存在，p4 按 changelist number 范围限定，不会报错
     const args = buildIntegrateArgs({
       targetClient: 'c_weekly',
       targetChange: '2150002',
+      sourceChange: 2137156,
       file: {
         sourcePath: '//C7/Development/Mainline/Client/B.lua',
         targetPath: '//C7/Development/Weekly/Client/B.lua',
@@ -353,7 +355,7 @@ describe('buildIntegrateArgs', () => {
     expect(args).toEqual([
       '-c', 'c_weekly',
       'integrate', '-c', '2150002',
-      '//C7/Development/Mainline/Client/B.lua', '//C7/Development/Weekly/Client/B.lua',
+      '//C7/Development/Mainline/Client/B.lua@2137155,2137156', '//C7/Development/Weekly/Client/B.lua',
     ])
   })
 })

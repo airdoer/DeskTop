@@ -508,11 +508,20 @@ export function computeMergePreview(params: {
 /* ---------- 命令构造 ---------- */
 
 /**
- * 构造 `p4 -c <targetClient> integrate -c <targetChange> <source>#<rev> <target>` 参数（单文件）.
+ * 构造 `p4 -c <targetClient> integrate -c <targetChange> <source>@<cl-1>,<cl> <target>` 参数（单文件）.
  * spec §17：优先 `p4 integrate -c <targetPendingChange> ...` 让结果直接进入 Pending CL.
  *
+ * ⚠ 关键（2026-09 修复）：用 **changelist range `@<sourceChange-1>,<sourceChange>`** 而非 `#<sourceRev>`.
+ *   - `#<sourceRev>` 的 p4 语义是「集成到 #sourceRev 为止的所有未集成 revisions」。
+ *     若目标分支该文件版本很旧（如上次只集成到 #300），#300 到 #340 之间所有未集成的
+ *     revisions 都会被带过来 → merge 结果带上「很多其他行的提交」（非本次 CL 的修改）。
+ *   - `@<cl-1>,<cl>` 的 p4 语义是「只集成 changelist number 在 (cl-1, cl] 范围内的 revisions」，
+ *     即只集成 changelist sourceChange 这一次对该文件的修改。cl-1 不存在也无妨——p4 按
+ *     changelist number 范围限定，不是按时间，会精确命中 sourceChange.
+ *   - 这样即便目标分支该文件从未集成过，也只把这次 CL 的 diff 集成过去，不会连带历史 revisions.
+ *
  * 坑（踩过，勿改回）：**p4 integrate 的 `fromFile toFile` 形式一次只接受一对具体文件**，
- *   不能把多对 `source#rev target` 塞进同一条命令——p4 会解析失败并打印 Usage 帮助、
+ *   不能把多对 `source@cl target` 塞进同一条命令——p4 会解析失败并打印 Usage 帮助、
  *   非 0 退出。Perforce 官方文档明确：要指定多个文件必须用通配符（`...`/`*`），
  *   且 fromFile 与 toFile 的通配符必须一一对应。跨分支 Merge 的文件往往分散在多个目录，
  *   无法用通配符安全覆盖，因此采用「逐文件执行 integrate」的最稳妥策略，由调用方循环
@@ -523,16 +532,18 @@ export function computeMergePreview(params: {
 export function buildIntegrateArgs(params: {
   targetClient: string
   targetChange: string
-  file: { sourcePath: string; targetPath: string; sourceRevision?: number }
+  /** 源 changelist number；只集成这一次提交对文件的修改（changelist range 限定） */
+  sourceChange: number
+  file: { sourcePath: string; targetPath: string }
 }): string[] {
-  const revSuffix = params.file.sourceRevision ? `#${params.file.sourceRevision}` : ''
+  const fromSpec = `${params.file.sourcePath}@${params.sourceChange - 1},${params.sourceChange}`
   return [
     '-c',
     params.targetClient,
     'integrate',
     '-c',
     params.targetChange,
-    `${params.file.sourcePath}${revSuffix}`,
+    fromSpec,
     params.file.targetPath,
   ]
 }

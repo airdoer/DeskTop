@@ -1589,6 +1589,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           const integrateArgs = buildIntegrateArgs({
             targetClient,
             targetChange: String(targetChange),
+            sourceChange: payload.sourceChange,
             file,
           })
           const integRes = await runP4Cancellable(p4, integrateArgs, {
