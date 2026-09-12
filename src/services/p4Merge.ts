@@ -108,6 +108,8 @@ export interface PipelineStepState {
   startedAt?: number
   endedAt?: number
   error?: string
+  /** Excel 三路合并备份目录（resolve 步骤含 xlsx 时填充），前端渲染「打开备份目录」按钮 */
+  backupDir?: string
 }
 
 /* ---------- IPC 响应类型 ---------- */
@@ -145,7 +147,7 @@ export interface ExecuteMergeParams {
   sourceDescription: string
   mapping: BranchMapping
   user: string
-  files: { sourcePath: string; targetPath: string; sourceRevision?: number }[]
+  files: { sourcePath: string; targetPath: string; sourceRevision?: number; action?: string }[]
   /** Sync 模式：file（默认）= 只 sync CL 涉及文件；directory = sync 共同父目录 /... */
   syncMode: 'file' | 'directory'
   /**

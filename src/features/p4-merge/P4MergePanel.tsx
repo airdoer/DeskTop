@@ -324,6 +324,7 @@ export function P4MergePanel() {
         sourcePath: f.depotPath,
         targetPath: mapToTargetPath(f.depotPath, mapping) ?? f.depotPath,
         sourceRevision: f.revision,
+        action: f.action,
       }))
       const params: ExecuteMergeParams = {
         sourceClient,

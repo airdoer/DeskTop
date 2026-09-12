@@ -722,6 +722,11 @@ export interface PipelineStepState {
   endedAt?: number
   /** 失败原因（status=failed 时） */
   error?: string
+  /**
+   * Excel 三路合并备份目录（仅 resolve 步骤在含 xlsx 文件时填充）.
+   * 前端据此渲染「一键打开备份目录」按钮，成功/失败均展示.
+   */
+  backupDir?: string
 }
 
 /** 流程管线状态：按固定顺序排列，UI 从左到右渲染 */
