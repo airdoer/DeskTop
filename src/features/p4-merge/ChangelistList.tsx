@@ -105,7 +105,7 @@ export function ChangelistList({
           setPage(0)
         }),
         desc: renderDescriptionCell(c.description),
-        pick: c.change === selected ? <span className="text-[11px] text-primary font-medium">已选</span> : '',
+        pick: c.change === selected ? <span className="text-[11px] text-primary font-medium whitespace-nowrap">已选</span> : '',
       })),
     [pageRows, selected, sourceClient, connection],
   )

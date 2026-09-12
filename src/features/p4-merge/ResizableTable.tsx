@@ -169,7 +169,7 @@ export function ResizableTable({
                 {columns.map((col) => (
                   <td
                     key={col.key}
-                    className={`px-2 py-1.5 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'}`}
+                    className={`px-2 py-1.5 whitespace-nowrap ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'}`}
                   >
                     {row[col.key] ?? ''}
                   </td>
