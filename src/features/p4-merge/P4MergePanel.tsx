@@ -38,6 +38,7 @@ import {
 } from '@/services/p4Workspaces'
 import { usePanelCollapsed } from '@/hooks/usePanelCollapsed'
 import { PANEL_COLLAPSED_KEYS } from '@/services/uiPreferences'
+import { openPath } from '@/services/paths'
 
 /*
  * P4MergePanel — 跨分支 Perforce Merge 业务面板.
@@ -111,6 +112,11 @@ export function P4MergePanel() {
   const [executing, setExecuting] = useState(false)
   const [transactionId, setTransactionId] = useState<string | null>(null)
   const [targetChange, setTargetChange] = useState<number | undefined>(undefined)
+  /**
+   * Excel 三路合并（KeyExcelMerge.exe）的备份根目录.
+   * 含 xlsx 文件时主进程返回；成功/失败均展示「打开备份目录」按钮，点击调 path:open 在资源管理器打开.
+   */
+  const [backupDir, setBackupDir] = useState<string | undefined>(undefined)
   /**
    * Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge 涉及的文件时，
    * 主进程返回 needConfirm + 文件列表，渲染层保存待确认上下文并显示内联确认 UI.
@@ -220,9 +226,15 @@ export function P4MergePanel() {
     setPreview(null)
     try {
       // 用 effectiveUser 过滤（帮别人 merge 时可手动改写）；为空时不加 -u，返回该 client 全部 CL
+      // 当 effectiveUser 与当前 P4USER 不同（帮别人 merge）时，启用 globalSearch：
+      //   去掉 -c <client> 改为全局搜索该 user 提交的 CL，
+      //   因为 -c 与 -u 是 AND 关系，别人不会从我的 client 提交，带 -c 必然查不到；
+      //   查到的 CL 最终仍 merge 到当前用户的目标分支.
+      const isOthersUser = !!effectiveUser && effectiveUser !== snapshot?.user
       const res = await listChangelists({
         client: sourceClient,
         user: effectiveUser || undefined,
+        globalSearch: isOthersUser,
         limit: 50,
       })
       if (!res.ok || !res.changes) {
@@ -231,7 +243,11 @@ export function P4MergePanel() {
       }
       setChanges(res.changes)
       if (res.changes.length === 0) {
-        toast.info(`该 Workspace 没有匹配 ${effectiveUser || '全部用户'} 的已提交 Changelist`)
+        toast.info(
+          isOthersUser
+            ? `没有匹配用户 ${effectiveUser} 的已提交 Changelist`
+            : `该 Workspace 没有匹配 ${effectiveUser || '全部用户'} 的已提交 Changelist`,
+        )
       }
     } finally {
       setLoadingChanges(false)
@@ -301,6 +317,7 @@ export function P4MergePanel() {
     setPipeline(createInitialPipeline())
     setExecuting(true)
     setTargetChange(undefined)
+    setBackupDir(undefined)
     setPendingConfirm(null)
     try {
       const files = describe.files.map((f) => ({
@@ -322,6 +339,8 @@ export function P4MergePanel() {
       const res = await executeMerge(params)
       if (res.transactionId) setTransactionId(res.transactionId)
       if (res.targetChange) setTargetChange(res.targetChange)
+      // Excel 备份目录：无论成功失败都展示（含 xlsx 时主进程会返回）
+      if (res.backupDir) setBackupDir(res.backupDir)
       // Preflight 检测到重叠已打开文件：进入确认流程，不弹 error toast
       if (res.needConfirm && res.overlappingOpened && res.overlappingOpened.length > 0) {
         setPendingConfirm({ files: res.overlappingOpened, params })
@@ -516,6 +535,20 @@ export function P4MergePanel() {
             <span className="text-[12px] text-success">
               ✓ Pending CL #{targetChange} 已就绪（未自动提交）
             </span>
+          )}
+          {backupDir && !executing && (
+            <button
+              type="button"
+              className="text-[12px] text-primary hover:underline inline-flex items-center gap-1 max-w-full"
+              title={backupDir}
+              onClick={async () => {
+                const r = await openPath(backupDir)
+                if (!r.ok) toast.error(`打开备份目录失败：${r.error ?? '未知错误'}`)
+              }}
+            >
+              <FolderOpenIcon size={12} />
+              📁 打开 Excel 备份目录
+            </button>
           )}
         </div>
 

@@ -754,3 +754,105 @@ export function generateTransactionId(date: Date = new Date()): string {
     .padStart(5, '0')
   return `MERGE-${y}${m}${d}-${seq}`
 }
+
+/* ---------- Excel（xlsx/xlsm/xls）三路合并：DeskTop 自取版本 + KeyExcelMerge 纯本地合并 ---------- */
+
+/**
+ * 走 KeyExcelMerge.exe 的 Excel 扩展名.
+ * 这类文件 p4 默认按二进制 (+B) 处理，`p4 resolve -am` 无法三路合并 → 只会 accept source 覆盖.
+ * 因此交给 KeyExcelMerge.exe 做真正的 Excel 三路合并，DeskTop 用 p4 print 自取 base/their/mine 三份.
+ */
+export const EXCEL_EXTENSIONS = new Set(['.xlsx', '.xlsm', '.xls'])
+
+/**
+ * 单个 Excel 文件的三路合并输入：base/their/mine 三份本地文件路径 + merged 输出位置.
+ *   - base：目标文件 integrate 前的版本（p4 print #have 取 target workspace 已有版本）
+ *   - their：源文件的指定版本（p4 print <sourcePath>#<sourceRev>）
+ *   - mine：目标 workspace 本地文件（p4 where 取本地路径，integrate 后 p4 已把 theirs 写入并标记 conflict）
+ *   - merged：KeyExcelMerge.exe 产出的合并结果，回写到 mine 位置，再 p4 resolve -ay 用本地版本解决冲突
+ */
+export interface ExcelMergeContext {
+  /** 目标文件 depot 路径（用于 p4 resolve -ay 回写后解决冲突） */
+  targetDepotPath: string
+  baseFile: string
+  theirFile: string
+  mineFile: string
+}
+
+/**
+ * 构造 `p4 -c <client> print -q -o <outputFile> <depotPath>#<rev>` 参数.
+ * `-q -o`：quiet 模式输出到指定文件（不打印到 stdout）.
+ * revision 缺省时不追加 #rev（取 head）；传 'have' 字符串取当前 workspace 已有版本.
+ */
+export function buildP4PrintArgs(params: {
+  client: string
+  outputFile: string
+  depotPath: string
+  revision?: number | string
+}): string[] {
+  const revSuffix = params.revision !== undefined && params.revision !== '' ? `#${params.revision}` : ''
+  return ['-c', params.client, 'print', '-q', '-o', params.outputFile, `${params.depotPath}${revSuffix}`]
+}
+
+/**
+ * 构造 `p4 -c <client> where <depotPath>` 参数.
+ * `p4 where` 返回三列：depotPath clientPath localPath，取 localPath 作为本地文件路径.
+ */
+export function buildP4WhereArgs(params: { client: string; depotPath: string }): string[] {
+  return ['-c', params.client, 'where', params.depotPath]
+}
+
+/**
+ * 解析 `p4 where` 输出，取本地文件路径（第三列）.
+ * 典型输出：
+ *   //C7/Development/Weekly/Client/A.lua //chenzhixu_C7_Weekly/Client/A.lua E:\Project\C7_project\Client\A.lua
+ * 多行时取第一行（p4 where 单文件只返回一行）.
+ * 无效输入返回 null.
+ */
+export function parseP4WhereOutput(output: string): string | null {
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line.startsWith('//')) continue
+    const parts = line.split(/\s+/)
+    if (parts.length >= 3) return parts[2]
+  }
+  return null
+}
+
+/**
+ * 构造 KeyExcelMerge.exe 的命令行参数（VCSTool=none 模式，纯本地三路合并）.
+ *
+ * 参数格式（见 ExcelMerge.bat 与 ExcelUtils.ParseExcelFileList 源码）：
+ *   - ExcelFileList：`;` 分隔多组，每组 `,` 分隔 base,mine,their 三个本地文件路径
+ *   - VCSTool=none：不让 KeyExcelMerge 内部执行任何 p4 命令
+ *   - ExcelBackupPath：备份根目录，工具会在其下建 mergeExcelBackup/<timestamp>/<excelName>/
+ *
+ * 永远走 spawn(executable, args)，不拼 shell 字符串（spec §69.3/§69.4）.
+ */
+export function buildExcelMergeArgs(params: {
+  contexts: ExcelMergeContext[]
+  backupRootDir: string
+}): string[] {
+  const fileList = params.contexts
+    .map((c) => `${c.baseFile},${c.mineFile},${c.theirFile}`)
+    .join(';')
+  return [
+    `ExcelFileList=${fileList}`,
+    'VCSTool=none',
+    `ExcelBackupPath=${params.backupRootDir}`,
+  ]
+}
+
+/**
+ * 构造 `p4 -c <client> resolve -ay <files>` 参数（accept yours，用本地版本解决冲突）.
+ *
+ * 用途：KeyExcelMerge.exe 把 merged 结果写到本地 mine 文件后，用 -ay 让 p4 接受本地版本
+ *   作为 resolve 结果（等价于「我已经手动 merge 好了，用我的」），不再触发 p4 的二进制覆盖.
+ *
+ * 若传入 file 列表则只 resolve 这些文件；不传则 resolve 全部已 integrate 文件.
+ */
+export function buildResolveAcceptYoursArgs(params: { targetClient: string; files?: string[] }): string[] {
+  const args = ['-c', params.targetClient, 'resolve', '-ay']
+  if (params.files && params.files.length > 0) args.push(...params.files)
+  return args
+}

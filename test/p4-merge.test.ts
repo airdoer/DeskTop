@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 // 与既有测试一致：vitest 未配置 @/ 别名，用相对路径引用
 import {
+  buildExcelMergeArgs,
   buildIntegrateArgs,
   buildOpenedArgs,
   buildPendingChangeDescription,
+  buildP4PrintArgs,
+  buildP4WhereArgs,
+  buildResolveAcceptYoursArgs,
   buildResolveArgs,
   buildResolveOverrideArgs,
   buildRevertArgs,
@@ -11,6 +15,7 @@ import {
   computeMergePreview,
   createInitialPipeline,
   dedupeCommonParentDirs,
+  EXCEL_EXTENSIONS,
   formatTimestamp,
   generateTransactionId,
   getExtension,
@@ -19,6 +24,7 @@ import {
   normalizeDepotRoot,
   parseDescribeOutput,
   parseOpenedOutput,
+  parseP4WhereOutput,
   parseTaggedChanges,
   PIPELINE_STEP_ORDER,
   replaceChangeFormDescription,
@@ -783,5 +789,140 @@ describe('findWorkspaceByBranch / sortWorkspacesByBranch', () => {
       'chenzhixu_onlineDesign',
       'czx_test_switchStream',
     ])
+  })
+})
+
+/*
+ * Excel 三路合并（KeyExcelMerge.exe VCSTool=none）相关纯函数.
+ * DeskTop 用 p4 print 自取 base/their + p4 where 取 mine，再调用 KeyExcelMerge 做纯本地合并.
+ */
+describe('buildP4PrintArgs', () => {
+  it('带数字 revision 追加 #rev', () => {
+    expect(buildP4PrintArgs({
+      client: 'c_weekly',
+      outputFile: 'E:\\tmp\\base.xlsx',
+      depotPath: '//C7/Dev/Weekly/Client/A.xlsx',
+      revision: 3,
+    })).toEqual([
+      '-c', 'c_weekly', 'print', '-q', '-o', 'E:\\tmp\\base.xlsx',
+      '//C7/Dev/Weekly/Client/A.xlsx#3',
+    ])
+  })
+  it('revision=have 取当前 workspace 已有版本（base 共同祖先）', () => {
+    expect(buildP4PrintArgs({
+      client: 'c_weekly',
+      outputFile: 'E:\\tmp\\base.xlsx',
+      depotPath: '//C7/Dev/Weekly/Client/A.xlsx',
+      revision: 'have',
+    })).toEqual([
+      '-c', 'c_weekly', 'print', '-q', '-o', 'E:\\tmp\\base.xlsx',
+      '//C7/Dev/Weekly/Client/A.xlsx#have',
+    ])
+  })
+  it('revision 缺省时不追加 #rev（取 head）', () => {
+    expect(buildP4PrintArgs({
+      client: 'c_mainline',
+      outputFile: '/tmp/their.xlsx',
+      depotPath: '//C7/Dev/Mainline/Client/A.xlsx',
+    })).toEqual([
+      '-c', 'c_mainline', 'print', '-q', '-o', '/tmp/their.xlsx',
+      '//C7/Dev/Mainline/Client/A.xlsx',
+    ])
+  })
+})
+
+describe('buildP4WhereArgs', () => {
+  it('构造 p4 -c <client> where <depotPath>', () => {
+    expect(buildP4WhereArgs({ client: 'c_weekly', depotPath: '//C7/Dev/Weekly/Client/A.xlsx' }))
+      .toEqual(['-c', 'c_weekly', 'where', '//C7/Dev/Weekly/Client/A.xlsx'])
+  })
+})
+
+describe('parseP4WhereOutput', () => {
+  it('取三列输出的第三列（本地路径）', () => {
+    const output = '//C7/Dev/Weekly/Client/A.xlsx //c_weekly/Client/A.xlsx E:\\Project\\C7_project\\Client\\A.xlsx\n'
+    expect(parseP4WhereOutput(output)).toBe('E:\\Project\\C7_project\\Client\\A.xlsx')
+  })
+  it('多行取第一行（p4 where 单文件只返回一行）', () => {
+    const output = '//a //b /c\n//x //y /z\n'
+    expect(parseP4WhereOutput(output)).toBe('/c')
+  })
+  it('非 // 开头或列数不足返回 null', () => {
+    expect(parseP4WhereOutput('no map\n')).toBeNull()
+    expect(parseP4WhereOutput('//a //b\n')).toBeNull()
+    expect(parseP4WhereOutput('')).toBeNull()
+  })
+})
+
+describe('buildExcelMergeArgs', () => {
+  it('构造 ExcelFileList=base,mine,their;... + VCSTool=none + ExcelBackupPath', () => {
+    const args = buildExcelMergeArgs({
+      contexts: [
+        {
+          targetDepotPath: '//C7/Dev/Weekly/Client/A.xlsx',
+          baseFile: 'E:\\bk\\base_A.xlsx',
+          theirFile: 'E:\\bk\\their_A.xlsx',
+          mineFile: 'E:\\ws\\Client\\A.xlsx',
+        },
+        {
+          targetDepotPath: '//C7/Dev/Weekly/Client/B.xlsx',
+          baseFile: 'E:\\bk\\base_B.xlsx',
+          theirFile: 'E:\\bk\\their_B.xlsx',
+          mineFile: 'E:\\ws\\Client\\B.xlsx',
+        },
+      ],
+      backupRootDir: 'E:\\bk',
+    })
+    expect(args).toEqual([
+      'ExcelFileList=E:\\bk\\base_A.xlsx,E:\\ws\\Client\\A.xlsx,E:\\bk\\their_A.xlsx;E:\\bk\\base_B.xlsx,E:\\ws\\Client\\B.xlsx,E:\\bk\\their_B.xlsx',
+      'VCSTool=none',
+      'ExcelBackupPath=E:\\bk',
+    ])
+  })
+  it('单个文件也正确拼接', () => {
+    const args = buildExcelMergeArgs({
+      contexts: [
+        {
+          targetDepotPath: '//C7/Dev/Weekly/Client/A.xlsx',
+          baseFile: '/bk/base_A.xlsx',
+          theirFile: '/bk/their_A.xlsx',
+          mineFile: '/ws/A.xlsx',
+        },
+      ],
+      backupRootDir: '/bk',
+    })
+    expect(args[0]).toBe('ExcelFileList=/bk/base_A.xlsx,/ws/A.xlsx,/bk/their_A.xlsx')
+    expect(args[1]).toBe('VCSTool=none')
+    expect(args[2]).toBe('ExcelBackupPath=/bk')
+  })
+})
+
+describe('buildResolveAcceptYoursArgs', () => {
+  it('构造 p4 -c <client> resolve -ay（accept yours，用本地 merged 结果解决冲突）', () => {
+    expect(buildResolveAcceptYoursArgs({ targetClient: 'c_weekly' }))
+      .toEqual(['-c', 'c_weekly', 'resolve', '-ay'])
+  })
+  it('传入 excel 文件列表时追加到末尾', () => {
+    const args = buildResolveAcceptYoursArgs({
+      targetClient: 'c_weekly',
+      files: ['//C7/Dev/Weekly/Client/A.xlsx', '//C7/Dev/Weekly/Client/B.xlsx'],
+    })
+    expect(args).toEqual([
+      '-c', 'c_weekly', 'resolve', '-ay',
+      '//C7/Dev/Weekly/Client/A.xlsx', '//C7/Dev/Weekly/Client/B.xlsx',
+    ])
+  })
+})
+
+describe('EXCEL_EXTENSIONS', () => {
+  it('覆盖 xlsx / xlsm / xls 三种 Excel 扩展名', () => {
+    expect(EXCEL_EXTENSIONS.has('.xlsx')).toBe(true)
+    expect(EXCEL_EXTENSIONS.has('.xlsm')).toBe(true)
+    expect(EXCEL_EXTENSIONS.has('.xls')).toBe(true)
+  })
+  it('非 Excel 扩展名不命中（避免误走 KeyExcelMerge）', () => {
+    expect(EXCEL_EXTENSIONS.has('.lua')).toBe(false)
+    expect(EXCEL_EXTENSIONS.has('.uasset')).toBe(false)
+    expect(EXCEL_EXTENSIONS.has('.csv')).toBe(false)
   })
 })

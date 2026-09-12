@@ -16,23 +16,30 @@ import {
 import {
   buildIntegrateArgs,
   buildPendingChangeDescription,
+  buildP4PrintArgs,
+  buildP4WhereArgs,
   buildResolveArgs,
+  buildResolveAcceptYoursArgs,
   buildResolveOverrideArgs,
   buildRevertArgs,
   buildOpenedArgs,
   buildSyncArgs,
+  buildExcelMergeArgs,
   computeMergePreview,
   createInitialPipeline,
   generateTransactionId,
   BINARY_EXTENSIONS,
+  EXCEL_EXTENSIONS,
   getExtension,
   MergeToolRegistry,
   parseDescribeOutput,
   parseOpenedOutput,
+  parseP4WhereOutput,
   parseTaggedChanges,
   replaceChangeFormDescription,
   summarizeP4Error,
   type BranchMapping,
+  type ExcelMergeContext,
   type MergePreview,
   type MergeTool,
   type P4Changelist,
@@ -1064,6 +1071,10 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   const P4_MERGE_INTEGRATE_TIMEOUT_MS = 120000
   const P4_MERGE_RESOLVE_TIMEOUT_MS = 120000
   const P4_MERGE_CHANGE_TIMEOUT_MS = 15000
+  /** KeyExcelMerge.exe 单次执行超时（xlsx 三路合并，EPPlus 读+合并+写较慢，给到 10 分钟） */
+  const P4_MERGE_EXCEL_TIMEOUT_MS = 600000
+  /** p4 print 单文件下载超时 */
+  const P4_MERGE_PRINT_TIMEOUT_MS = 60000
 
   /** 进行中的 Merge 事务：transactionId → AbortController，cancel 时 kill 子进程 */
   const activeMergeTransactions = new Map<string, AbortController>()
@@ -1136,7 +1147,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
 
   /**
    * 查已提交 changelist（spec §8）.
-   * 命令：`p4 -ztag changes -c <client> -s submitted -m <limit> [-u <user>]`
+   * 命令：`p4 -ztag changes -s submitted -L -m <limit> [-c <client>] [-u <user>]`
    *
    * 关键点（踩过的坑）：
    *   1. 必须加 `-ztag`：默认输出是 `Change 2137156 on ... by user@client 'desc'` 单行文本，
@@ -1145,10 +1156,17 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
    *      对 `changes` 命令无过滤作用；作为子选项才按 client 过滤（p4 changes 文档）.
    *   3. ztag 字段名是 `desc`（单行）与 `time`（unix 秒），不是 `description` / `date`；
    *      完整多行描述需 `p4 describe`（见 p4-merge:describe handler）.
+   *   4. `-c <client>` 与 `-u <user>` 是 AND 关系：同时带会要求 CL 既从该 client 提交
+   *      又由该 user 提交。帮别人 merge 时别人不会从我的 client 提交，结果必然为空，
+   *      因此 globalSearch=true 时去掉 `-c`，只按 `-u <user>` 全局搜索；查到的 CL
+   *      最终仍 merge 到当前用户的目标分支.
    */
   ipcMain.handle(
     'p4-merge:changes',
-    async (_, payload: { client: string; user?: string; limit?: number }): Promise<{
+    async (
+      _,
+      payload: { client: string; user?: string; limit?: number; globalSearch?: boolean },
+    ): Promise<{
       ok: boolean
       changes?: P4Changelist[]
       error?: string
@@ -1156,12 +1174,20 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       const p4 = resolveP4Executable()
       if (!p4) return { ok: false, error: '未检测到 p4 命令行工具' }
       const client = payload?.client?.trim()
-      if (!client) return { ok: false, error: '缺少 source workspace client' }
+      const user = payload?.user?.trim()
+      const globalSearch = payload?.globalSearch === true
+      // globalSearch（帮别人 merge）时只按 -u <user> 过滤，不加 -c <client>：
+      //   -c 和 -u 是 AND 关系，同时带会要求 CL 既从该 client 提交又由该 user 提交，
+      //   别人不可能从我的 client 提交，结果必然为空。
+      // 非全局搜索时按 -c <client> 过滤当前 client 的 CL（user 留空则返回该 client 全部 CL）。
+      if (!globalSearch && !client) return { ok: false, error: '缺少 source workspace client' }
+      if (globalSearch && !user) return { ok: false, error: '全局搜索时必须指定 user' }
       const limit = Math.max(1, Math.min(payload?.limit ?? 50, 500))
       try {
         // -L：显示完整描述（默认只给首行，会截断导致 Redmine 单号丢失）
-        const args = ['-ztag', 'changes', '-c', client, '-s', 'submitted', '-L', '-m', String(limit)]
-        if (payload?.user) args.push('-u', payload.user)
+        const args = ['-ztag', 'changes', '-s', 'submitted', '-L', '-m', String(limit)]
+        if (!globalSearch) args.push('-c', client)
+        if (user) args.push('-u', user)
         const out = await runCommand(p4, args, P4_MERGE_CHANGES_TIMEOUT_MS)
         return { ok: true, changes: parseTaggedChanges(out) }
       } catch (e) {
@@ -1326,6 +1352,34 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     }
   }
 
+  /** KeyExcelMerge.exe 在 Mainline workspace 下的相对路径（项目工具，随仓库提交） */
+  const KEY_EXCEL_MERGE_RELATIVE = 'Design/Tool/KeyExcelMergeTool/KeyExcelMerge/KeyExcelMerge.exe'
+
+  /**
+   * 定位 KeyExcelMerge.exe 绝对路径.
+   * 策略：查 p4 clients 找 Mainline workspace（root 在本机）→ 拼 <root>/<relative> → 校验存在.
+   * 找不到返回 null，调用方据此决定是否回退到 p4 resolve -am（会被 p4 当 binary 覆盖）.
+   *
+   * 不依赖前端传入：Merge 流程中 source/target 不一定是 Mainline（可能 Preonline → Online），
+   *   但 KeyExcelMerge.exe 作为项目工具固定部署在 Mainline workspace 下，故统一从 Mainline 查.
+   */
+  async function resolveKeyExcelMergeExe(p4: string): Promise<string | null> {
+    try {
+      // p4 set 拿 P4USER；p4 -ztag clients -u <user> 只列自己的 client（避免全服 80w 条）
+      const env = parseP4Set(await runCommand(p4, ['set'], P4_SET_TIMEOUT_MS))
+      const user = env.P4USER ?? ''
+      const args = user ? ['-ztag', 'clients', '-u', user] : ['-ztag', 'clients']
+      const output = await runCommand(p4, args, P4_CLIENTS_TIMEOUT_MS)
+      const records = parseTaggedClients(output)
+      const mainline = findMainlineWorkspace(records)
+      if (!mainline?.root) return null
+      const exePath = path.join(mainline.root, ...KEY_EXCEL_MERGE_RELATIVE.split('/'))
+      return existsSync(exePath) ? exePath : null
+    } catch {
+      return null
+    }
+  }
+
   /**
    * 执行 Merge 流程（spec §16/§26/§71）：
    *   preflight → sync → pending → integrate → resolve → result
@@ -1352,6 +1406,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       ok: boolean
       transactionId?: string
       targetChange?: number
+      /** Excel 三路合并（KeyExcelMerge.exe）的备份根目录；含 xlsx 文件时返回，供前端「打开备份目录」 */
+      backupDir?: string
       error?: string
       needConfirm?: boolean
       overlappingOpened?: P4OpenedFile[]
@@ -1387,6 +1443,10 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           emitProgress(transactionId, id, pipeline[idx])
         }
       }
+
+      // Excel 三路合并备份目录：5c 成功或失败都返回给前端「打开备份目录」.
+      // 声明在 try 外层，catch 也能访问并回传给前端.
+      let excelBackupDir: string | undefined
 
       try {
         /* Step 1: Preflight —— 检查目标 workspace 已打开文件，区分「与本次 Merge 重叠」与「无关」两类：
@@ -1561,15 +1621,26 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         pushLog('integrate', `Integrate 完成（${payload.files.length} 个文件）`)
         setStep('integrate', { status: 'success', endedAt: Date.now() })
 
-        /* Step 5: Resolve —— 文本走 p4 resolve -am，二进制走 p4 resolve -as 覆盖（spec §26 + §22 Binary 覆盖策略） */
+        /* Step 5: Resolve —— 三分文件类型走不同策略（spec §26 + §22 Binary 覆盖策略 + Excel 三路合并）：
+         *   - 文本（.lua/.json/...）：p4 resolve -am 自动三路合并
+         *   - 二进制（.uasset/.png/...）：p4 resolve -as accept source 覆盖
+         *   - Excel（.xlsx/.xlsm/.xls）：KeyExcelMerge.exe VCSTool=none 纯本地三路合并，
+         *     DeskTop 用 p4 print 自取 base/their + p4 where 取 mine，合并后回写 + p4 resolve -ay.
+         *     原因：p4 把 xlsx 当 +B 二进制，`resolve -am` 无法三路合并只会 accept source 覆盖，
+         *     丢掉目标分支本地的修改；交给 KeyExcelMerge 才能真正按单元格三路合并. */
         setStep('resolve', { status: 'running', startedAt: Date.now() })
-        const allTargetFiles = payload.files.map((f) => f.targetPath)
-        // 按扩展名拆分：二进制走 accept source 覆盖，其余走 auto merge
         const binaryFiles = payload.files
           .filter((f) => BINARY_EXTENSIONS.has(getExtension(f.targetPath)))
           .map((f) => f.targetPath)
+        const excelFiles = payload.files
+          .filter((f) => EXCEL_EXTENSIONS.has(getExtension(f.targetPath)))
+        const excelTargetFiles = excelFiles.map((f) => f.targetPath)
         const textFiles = payload.files
-          .filter((f) => !BINARY_EXTENSIONS.has(getExtension(f.targetPath)))
+          .filter(
+            (f) =>
+              !BINARY_EXTENSIONS.has(getExtension(f.targetPath)) &&
+              !EXCEL_EXTENSIONS.has(getExtension(f.targetPath)),
+          )
           .map((f) => f.targetPath)
 
         // 5a: 文本自动合并
@@ -1623,6 +1694,152 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           setStep('resolve', { status: 'success', endedAt: Date.now() })
         }
 
+        // 5c: Excel 三路合并（KeyExcelMerge.exe VCSTool=none）
+        if (excelTargetFiles.length > 0) {
+          const excelExe = await resolveKeyExcelMergeExe(p4)
+          if (!excelExe) {
+            // 找不到 KeyExcelMerge.exe：回退到 p4 resolve -am（xlsx 会被 p4 当 binary 覆盖，但至少不阻塞流程）
+            pushLog('resolve', `⚠ 未找到 KeyExcelMerge.exe，${excelTargetFiles.length} 个 xlsx 回退到 p4 resolve -am（将被 p4 当 binary 覆盖）`)
+            const fallbackRes = await runP4Cancellable(
+              p4,
+              buildResolveArgs({ targetClient, files: excelTargetFiles, mode: 'auto' }),
+              { timeout: P4_MERGE_RESOLVE_TIMEOUT_MS, signal: controller.signal },
+            )
+            if (fallbackRes.aborted) {
+              setStep('resolve', { status: 'failed', error: '已取消', endedAt: Date.now() })
+              return { ok: false, transactionId, error: '已取消', targetChange }
+            }
+            pushLog('resolve', `fallback resolve -am 退出码 ${fallbackRes.exitCode}`)
+          } else {
+            // 备份根目录：KeyExcelMerge.exe 同目录下 mergeExcelBackup/dt-<ts>/，方便用户直接在工具目录找备份
+            const exeDir = path.dirname(excelExe)
+            const backupRoot = path.join(exeDir, 'mergeExcelBackup', `dt-${Date.now()}`)
+            await fs.mkdir(backupRoot, { recursive: true })
+
+            // 逐文件准备 base/their/mine 三份本地文件
+            const contexts: ExcelMergeContext[] = []
+            for (const f of excelFiles) {
+              // mine = p4 where <targetPath> 取本地路径
+              const whereRes = await runP4Cancellable(
+                p4,
+                buildP4WhereArgs({ client: targetClient, depotPath: f.targetPath }),
+                { timeout: P4_MERGE_PRINT_TIMEOUT_MS, signal: controller.signal },
+              )
+              if (whereRes.aborted) {
+                setStep('resolve', { status: 'failed', error: '已取消', endedAt: Date.now() })
+                return { ok: false, transactionId, error: '已取消', targetChange }
+              }
+              const mineLocal = parseP4WhereOutput(whereRes.stdout)
+              if (!mineLocal) {
+                pushLog('resolve', `⚠ p4 where 解析失败，跳过：${f.targetPath}`)
+                continue
+              }
+
+              const baseLocal = path.join(backupRoot, `base_${path.basename(f.targetPath)}`)
+              const theirLocal = path.join(backupRoot, `their_${path.basename(f.targetPath)}`)
+
+              // base = 目标 workspace 当前 have 版本（integrate 前的版本，三路合并的共同祖先）
+              const baseRes = await runP4Cancellable(
+                p4,
+                buildP4PrintArgs({ client: targetClient, outputFile: baseLocal, depotPath: f.targetPath, revision: 'have' }),
+                { timeout: P4_MERGE_PRINT_TIMEOUT_MS, signal: controller.signal },
+              )
+              // their = 源文件指定版本
+              const theirRes = await runP4Cancellable(
+                p4,
+                buildP4PrintArgs({ client: sourceClient, outputFile: theirLocal, depotPath: f.sourcePath, revision: f.sourceRevision }),
+                { timeout: P4_MERGE_PRINT_TIMEOUT_MS, signal: controller.signal },
+              )
+              if (baseRes.aborted || theirRes.aborted) {
+                setStep('resolve', { status: 'failed', error: '已取消', endedAt: Date.now() })
+                return { ok: false, transactionId, error: '已取消', targetChange }
+              }
+              if (baseRes.exitCode !== 0 || theirRes.exitCode !== 0) {
+                pushLog('resolve', `⚠ p4 print 失败 base=${shortenP4Error(baseRes.stderr || baseRes.stdout)} their=${shortenP4Error(theirRes.stderr || theirRes.stdout)}`)
+              }
+              if (!existsSync(baseLocal) || !existsSync(theirLocal)) {
+                pushLog('resolve', `⚠ 三路文件未就绪，跳过：${f.targetPath}`)
+                continue
+              }
+              contexts.push({ targetDepotPath: f.targetPath, baseFile: baseLocal, theirFile: theirLocal, mineFile: mineLocal })
+            }
+
+            if (contexts.length > 0) {
+              const excelArgs = buildExcelMergeArgs({ contexts, backupRootDir: backupRoot })
+              pushLog('resolve', `KeyExcelMerge.exe (VCSTool=none, ${contexts.length} excel files) → ${backupRoot}`)
+              const excelRes = await runP4Cancellable(excelExe, excelArgs, {
+                timeout: P4_MERGE_EXCEL_TIMEOUT_MS,
+                signal: controller.signal,
+              })
+              excelBackupDir = backupRoot
+              if (excelRes.aborted) {
+                setStep('resolve', { status: 'failed', error: '已取消', endedAt: Date.now() })
+                return { ok: false, transactionId, error: '已取消', targetChange, backupDir: excelBackupDir }
+              }
+              if (excelRes.exitCode !== 0) {
+                // KeyExcelMerge 失败：不阻塞整体流程，记录警告 + 备份目录，由用户在 P4V 手动 resolve
+                pushLog('resolve', `⚠ KeyExcelMerge 退出码 ${excelRes.exitCode}：${shortenP4Error(excelRes.stderr || excelRes.stdout)}`)
+                pushLog('resolve', `📁 备份目录：${backupRoot}`)
+              } else {
+                // 合并成功：扫描 backup 目录找 merged 文件，复制回 mine，再 p4 resolve -ay
+                const mergedRoot = path.join(backupRoot, 'mergeExcelBackup')
+                let mergedDirs: string[] = []
+                try {
+                  const entries = await fs.readdir(mergedRoot, { withFileTypes: true })
+                  // yyyyMMddHHmmss 字典序=时间序，降序取最新
+                  mergedDirs = entries
+                    .filter((e) => e.isDirectory())
+                    .map((e) => path.join(mergedRoot, e.name))
+                    .sort((a, b) => path.basename(b).localeCompare(path.basename(a)))
+                } catch {
+                  /* 目录不存在或读取失败，mergedDirs 留空 */
+                }
+
+                const resolveList: string[] = []
+                for (const ctx of contexts) {
+                  const excelName = path.basename(ctx.mineFile)
+                  const excelNameNoExt = excelName.replace(/\.(xlsx|xlsm|xls)$/i, '')
+                  let mergedFile: string | null = null
+                  for (const dir of mergedDirs) {
+                    const candidate = path.join(dir, excelNameNoExt, `merged.${excelName}`)
+                    if (existsSync(candidate)) {
+                      mergedFile = candidate
+                      break
+                    }
+                  }
+                  if (mergedFile) {
+                    // 复制 merged 回 mine（覆盖 workspace 本地文件）
+                    await fs.copyFile(mergedFile, ctx.mineFile)
+                    resolveList.push(ctx.targetDepotPath)
+                    pushLog('resolve', `✓ merged → ${ctx.mineFile}`)
+                  } else {
+                    pushLog('resolve', `⚠ 未找到 merged 文件，跳过：${excelName}`)
+                  }
+                }
+
+                // p4 resolve -ay 用本地版本（已写入 merged 结果）解决冲突
+                if (resolveList.length > 0) {
+                  pushLog('resolve', `p4 -c ${targetClient} resolve -ay (${resolveList.length} excel files, accept yours)`)
+                  const resolveRes = await runP4Cancellable(
+                    p4,
+                    buildResolveAcceptYoursArgs({ targetClient, files: resolveList }),
+                    { timeout: P4_MERGE_RESOLVE_TIMEOUT_MS, signal: controller.signal },
+                  )
+                  if (resolveRes.aborted) {
+                    setStep('resolve', { status: 'failed', error: '已取消', endedAt: Date.now() })
+                    return { ok: false, transactionId, error: '已取消', targetChange, backupDir: excelBackupDir }
+                  }
+                  if (resolveRes.exitCode !== 0) {
+                    pushLog('resolve', `⚠ resolve -ay 退出码 ${resolveRes.exitCode}：${shortenP4Error(resolveRes.stderr || resolveRes.stdout)}`)
+                  } else {
+                    pushLog('resolve', `Excel 三路合并完成（${resolveList.length} 个文件）`)
+                  }
+                }
+              }
+            }
+          }
+        }
+
         /* Step 6: Result —— 校验目标 Pending CL 文件（-c <changelist> 已限定范围，无需 -a） */
         setStep('result', { status: 'running', startedAt: Date.now() })
         const verifyRes = await runP4Cancellable(p4, buildOpenedArgs({ client: targetClient, change: targetChange }), {
@@ -1632,11 +1849,14 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         const verifyFiles = parseOpenedOutput(verifyRes.stdout)
         pushLog('result', `目标 Pending CL #${targetChange}：${verifyFiles.length} 个文件已就绪`)
         pushLog('result', '不自动 Submit，请通过 P4V / p4 自行 Review 后提交')
+        if (excelBackupDir) {
+          pushLog('result', `📁 Excel 备份目录：${excelBackupDir}`)
+        }
         setStep('result', { status: 'success', endedAt: Date.now() })
 
-        return { ok: true, transactionId, targetChange }
+        return { ok: true, transactionId, targetChange, backupDir: excelBackupDir }
       } catch (e) {
-        return { ok: false, transactionId, error: e instanceof Error ? e.message : String(e) }
+        return { ok: false, transactionId, error: e instanceof Error ? e.message : String(e), backupDir: excelBackupDir }
       } finally {
         activeMergeTransactions.delete(transactionId)
       }

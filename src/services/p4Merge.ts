@@ -160,6 +160,11 @@ export interface ExecuteResult {
   ok: boolean
   transactionId?: string
   targetChange?: number
+  /**
+   * Excel 三路合并（KeyExcelMerge.exe）的备份根目录；含 xlsx 文件时返回，
+   * 供前端在 Result 区展示「打开备份目录」按钮（成功与失败均返回）.
+   */
+  backupDir?: string
   error?: string
   /**
    * Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge 涉及的文件，
@@ -183,6 +188,12 @@ export async function listChangelists(params: {
   client: string
   user?: string
   limit?: number
+  /**
+   * 全局搜索（帮别人 merge）：只按 -u <user> 过滤，不加 -c <client>.
+   * 用于查询他人提交的 CL —— 别人不会从我的 client 提交，-c 与 -u 的 AND 关系会查不到，
+   * 因此需要去掉 -c 改为全局搜索，后续仍 merge 到当前用户的目标分支.
+   */
+  globalSearch?: boolean
 }): Promise<ChangesResult> {
   try {
     return (await window.ipcRenderer.invoke('p4-merge:changes', params)) as ChangesResult
