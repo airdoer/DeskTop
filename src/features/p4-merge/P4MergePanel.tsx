@@ -26,6 +26,7 @@ import {
   type MergePreview,
   type P4Changelist,
   type P4ChangeFile,
+  type P4OpenedFile,
   type PipelineStepState,
 } from '@/services/p4Merge'
 import {
@@ -110,6 +111,15 @@ export function P4MergePanel() {
   const [executing, setExecuting] = useState(false)
   const [transactionId, setTransactionId] = useState<string | null>(null)
   const [targetChange, setTargetChange] = useState<number | undefined>(undefined)
+  /**
+   * Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge 涉及的文件时，
+   * 主进程返回 needConfirm + 文件列表，渲染层保存待确认上下文并显示内联确认 UI.
+   * 用户确认 → 带 revertOverlapping=true 重跑；取消 → 清空.
+   */
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    files: P4OpenedFile[]
+    params: ExecuteMergeParams
+  } | null>(null)
 
   // 进度事件订阅：主进程每步状态变更推送 patch，按 transactionId 过滤
   useEffect(() => {
@@ -188,6 +198,15 @@ export function P4MergePanel() {
     }
   }, [sourceWs, targetWs])
 
+  /**
+   * 切换 Source/Target workspace 或重新选 Changelist 时，清掉残留的重叠文件确认框：
+   *   旧确认上下文（files/params）已与新选择不匹配，保留会让用户误以为新选择也存在冲突.
+   * runExecute 内部也会在发起执行前清一次，这里覆盖「用户改了参数但没执行」的场景.
+   */
+  useEffect(() => {
+    setPendingConfirm(null)
+  }, [sourceClient, targetClient, selectedChange])
+
   /** 加载 source workspace 的已提交 changelist（spec §8） */
   const loadChangelists = useCallback(async () => {
     if (!sourceClient) {
@@ -264,8 +283,9 @@ export function P4MergePanel() {
     [sourceClient, targetClient, mapping],
   )
 
-  /** 执行 Merge：reset pipeline → 调 executeMerge → 进度事件驱动管线更新 */
-  const runExecute = useCallback(async () => {
+  /** 执行 Merge：reset pipeline → 调 executeMerge → 进度事件驱动管线更新.
+   *  opts.revertOverlapping=true 用于用户在 pendingConfirm 确认后重跑，主进程会先 revert 重叠文件再继续. */
+  const runExecute = useCallback(async (opts?: { revertOverlapping?: boolean }) => {
     if (!sourceClient || !targetClient) {
       toast.warning('请先选择 Source / Target Workspace')
       return
@@ -281,6 +301,7 @@ export function P4MergePanel() {
     setPipeline(createInitialPipeline())
     setExecuting(true)
     setTargetChange(undefined)
+    setPendingConfirm(null)
     try {
       const files = describe.files.map((f) => ({
         sourcePath: f.depotPath,
@@ -296,10 +317,16 @@ export function P4MergePanel() {
         user: effectiveUser || snapshot?.user || '',
         files,
         syncMode,
+        revertOverlapping: opts?.revertOverlapping,
       }
       const res = await executeMerge(params)
       if (res.transactionId) setTransactionId(res.transactionId)
       if (res.targetChange) setTargetChange(res.targetChange)
+      // Preflight 检测到重叠已打开文件：进入确认流程，不弹 error toast
+      if (res.needConfirm && res.overlappingOpened && res.overlappingOpened.length > 0) {
+        setPendingConfirm({ files: res.overlappingOpened, params })
+        return
+      }
       if (!res.ok) {
         toast.error(`Merge 失败：${res.error ?? '未知错误'}`)
       } else {
@@ -491,6 +518,47 @@ export function P4MergePanel() {
             </span>
           )}
         </div>
+
+        {/* ---------- 重叠文件确认（Preflight 检测到目标 Pending CL 已有本次 Merge 文件）---------- */}
+        {pendingConfirm && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 flex flex-col gap-2">
+            <div className="text-[12.5px] font-semibold text-amber-900">
+              ⚠ 检测到 {pendingConfirm.files.length} 个文件已在目标 Workspace 的 Pending CL 中打开
+            </div>
+            <div className="text-[12px] text-amber-800 leading-5">
+              是否 Revert 这些文件并继续 Merge？Revert 会丢弃目标 Workspace 中这些文件的未提交修改，用本次 Merge 的结果重新打开。
+            </div>
+            <div className="max-h-32 overflow-y-auto rounded border border-amber-200 bg-white px-2 py-1.5 font-mono text-[11.5px] leading-5">
+              {pendingConfirm.files.slice(0, 20).map((f) => (
+                <div key={f.depotPath} className="truncate" title={f.depotPath}>
+                  {f.depotPath}
+                  {f.change && f.change !== 'default' ? <span className="text-foreground-tertiary"> @{f.change}</span> : null}
+                </div>
+              ))}
+              {pendingConfirm.files.length > 20 && (
+                <div className="text-foreground-tertiary">… 还有 {pendingConfirm.files.length - 20} 个</div>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <AppButton
+                variant="danger"
+                size="md"
+                onClick={() => void runExecute({ revertOverlapping: true })}
+                disabled={executing}
+              >
+                Revert 并继续
+              </AppButton>
+              <AppButton
+                variant="ghost"
+                size="md"
+                onClick={() => setPendingConfirm(null)}
+                disabled={executing}
+              >
+                取消
+              </AppButton>
+            </div>
+          </div>
+        )}
 
         {/* ---------- 从左到右流程管线 ---------- */}
         <div className="flex flex-col gap-1.5 pt-2 border-t border-border-subtle">

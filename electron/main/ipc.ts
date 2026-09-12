@@ -18,6 +18,7 @@ import {
   buildPendingChangeDescription,
   buildResolveArgs,
   buildResolveOverrideArgs,
+  buildRevertArgs,
   buildOpenedArgs,
   buildSyncArgs,
   computeMergePreview,
@@ -1312,12 +1313,16 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         user: string
         files: { sourcePath: string; targetPath: string; sourceRevision?: number }[]
         syncMode: 'file' | 'directory'
+        /** 用户确认后置 true：先 revert 重叠已打开文件再继续（见 service 层 ExecuteMergeParams） */
+        revertOverlapping?: boolean
       },
     ): Promise<{
       ok: boolean
       transactionId?: string
       targetChange?: number
       error?: string
+      needConfirm?: boolean
+      overlappingOpened?: P4OpenedFile[]
     }> => {
       const p4 = resolveP4Executable()
       if (!p4) return { ok: false, error: '未检测到 p4 命令行工具' }
@@ -1352,7 +1357,13 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       }
 
       try {
-        /* Step 1: Preflight —— 检查目标 workspace 已打开文件（scope 说明见 p4-merge:opened） */
+        /* Step 1: Preflight —— 检查目标 workspace 已打开文件，区分「与本次 Merge 重叠」与「无关」两类：
+         *   - 无关已打开文件（不在本次 Merge 的 target 路径集合内）：直接阻断，这是别人的 WIP，不能动；
+         *   - 重叠已打开文件（恰好是本次 Merge 要 integrate 的目标）：
+         *       · 首次调用（revertOverlapping 未传）：返回 needConfirm + 文件列表，让 UI 弹确认；
+         *       · 用户确认后带 revertOverlapping=true 重跑：先 p4 revert 这些文件再继续；
+         *   - 完全干净：直接进入 Sync.
+         * 这样既保护无关 WIP 不被误改，又让「目标 CL 里残留上次半 merge 的文件」这种常见情况能一键继续. */
         setStep('preflight', { status: 'running', startedAt: Date.now() })
         pushLog('preflight', `Target: ${targetClient}`)
         const openedRes = await runP4Cancellable(
@@ -1365,16 +1376,64 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           return { ok: false, transactionId, error: '已取消' }
         }
         const opened = parseOpenedOutput(openedRes.stdout)
-        if (opened.length > 0) {
-          // 带上样例文件，便于区分「自己的 WIP」还是「别人的待提交」
-          const samples = opened
+        const targetPathSet = new Set(payload.files.map((f) => f.targetPath))
+        const overlapping = opened.filter((o) => targetPathSet.has(o.depotPath))
+        const otherOpened = opened.filter((o) => !targetPathSet.has(o.depotPath))
+
+        // 1a: 无关已打开文件 —— 直接阻断（保护别人的 WIP）
+        if (otherOpened.length > 0) {
+          const samples = otherOpened
             .slice(0, 3)
             .map((f) => `${f.depotPath}${f.client ? ` @${f.client}` : ''}`)
             .join('、')
-          pushLog('preflight', `检测到 ${opened.length} 个已打开文件（未提交）：${samples}${opened.length > 3 ? ' …' : ''}`)
-          setStep('preflight', { status: 'failed', error: '目标 Workspace 存在未提交修改', endedAt: Date.now() })
-          return { ok: false, transactionId, error: `目标 Workspace 存在 ${opened.length} 个未提交文件，请先处理后再执行 Merge` }
+          pushLog('preflight', `检测到 ${otherOpened.length} 个与本次 Merge 无关的已打开文件：${samples}${otherOpened.length > 3 ? ' …' : ''}`)
+          setStep('preflight', { status: 'failed', error: '目标 Workspace 存在与本次 Merge 无关的未提交修改', endedAt: Date.now() })
+          return {
+            ok: false,
+            transactionId,
+            error: `目标 Workspace 存在 ${otherOpened.length} 个与本次 Merge 无关的未提交文件，请先处理后再执行 Merge`,
+          }
         }
+
+        // 1b: 重叠已打开文件 —— 需要用户确认
+        if (overlapping.length > 0 && !payload.revertOverlapping) {
+          const samples = overlapping
+            .slice(0, 5)
+            .map((f) => `${f.depotPath}${f.change && f.change !== 'default' ? ` @${f.change}` : ''}`)
+            .join('、')
+          pushLog('preflight', `检测到 ${overlapping.length} 个文件已在目标 Pending CL 中打开：${samples}${overlapping.length > 5 ? ' …' : ''}`)
+          setStep('preflight', { status: 'failed', error: '检测到重叠已打开文件，等待用户确认是否 Revert', endedAt: Date.now() })
+          return {
+            ok: false,
+            transactionId,
+            error: `目标 Workspace 的 Pending CL 中已有 ${overlapping.length} 个本次 Merge 涉及的文件，需确认是否 Revert 后继续`,
+            needConfirm: true,
+            overlappingOpened: overlapping,
+          }
+        }
+
+        // 1c: 用户已确认（revertOverlapping=true）—— revert 重叠文件后继续
+        if (overlapping.length > 0 && payload.revertOverlapping) {
+          const revertFiles = overlapping.map((o) => o.depotPath)
+          pushLog('preflight', `Revert ${revertFiles.length} 个重叠文件：p4 -c ${targetClient} revert <files>`)
+          const revertRes = await runP4Cancellable(
+            p4,
+            buildRevertArgs({ targetClient, files: revertFiles }),
+            { timeout: P4_MERGE_SYNC_TIMEOUT_MS, signal: controller.signal },
+          )
+          if (revertRes.aborted) {
+            setStep('preflight', { status: 'failed', error: '已取消', endedAt: Date.now() })
+            return { ok: false, transactionId, error: '已取消' }
+          }
+          if (revertRes.exitCode !== 0) {
+            const msg = summarizeP4Error(revertRes.stderr || revertRes.stdout)
+            pushLog('preflight', `Revert 失败：${msg}`)
+            setStep('preflight', { status: 'failed', error: msg, endedAt: Date.now() })
+            return { ok: false, transactionId, error: `Revert 失败：${msg}` }
+          }
+          pushLog('preflight', `Revert 完成（${revertFiles.length} 个文件）`)
+        }
+
         pushLog('preflight', '目标 Workspace 干净')
         setStep('preflight', { status: 'success', endedAt: Date.now() })
 
@@ -1413,7 +1472,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           user: payload.user || 'unknown',
           sourceDescription: payload.sourceDescription || '',
         })
-        pushLog('pending', `创建 Pending CL：[Cross Branch Merge] ${payload.sourceChange}`)
+        pushLog('pending', `创建 Pending CL：merge ${payload.sourceDescription || payload.sourceChange}`)
         const pendingRes = await createPendingChange(p4, targetClient, desc, controller.signal)
         if (!pendingRes.ok || !pendingRes.change) {
           const reason = pendingRes.error ?? '创建 Pending CL 失败'

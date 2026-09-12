@@ -561,6 +561,20 @@ export function buildResolveOverrideArgs(params: { targetClient: string; files?:
 }
 
 /**
+ * 构造 `p4 -c <targetClient> revert <files>` 参数（撤销已打开文件的修改）.
+ * 用于 Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge 涉及的文件时，
+ * 经用户确认后撤销这些文件的未提交修改，让 Integrate 能干净地重新打开.
+ *
+ * 不带 `-c <changelist>`：p4 规定一个文件在同一 client 同时只能属于一个 pending CL，
+ *   按 depot 路径 revert 会撤销该文件的打开状态（无论它在 default 还是某个 pending CL），
+ *   等价于 `p4 revert -c <它的 change> <file>`，但无需调用方解析 change 字段.
+ *   若未来需要「只 revert 某个 CL 中的文件」可再扩展可选 change 参数.
+ */
+export function buildRevertArgs(params: { targetClient: string; files: string[] }): string[] {
+  return ['-c', params.targetClient, 'revert', ...params.files]
+}
+
+/**
  * 构造 `p4 -c <targetClient> sync` 参数（spec §13/§14 最小范围 Sync）.
  *   - mode='file'：只 sync changelist 涉及的目标文件（默认，最小流量）
  *   - mode='directory'：计算文件共同的最小父目录，sync <dir>/...（同步范围略大但更稳妥）
@@ -625,8 +639,17 @@ export function dedupeCommonParentDirs(paths: string[]): string[] {
 }
 
 /**
- * 构造 `p4 -c <targetClient> change -o` 输入模板（spec §18 Pending CL 描述模板）.
- * 返回描述文本，主进程用 stdin 写给 `p4 change -i`.
+ * 构造目标 Pending Changelist 的描述（spec §18）.
+ * 用户期望：描述直接沿用源 changelist 的描述，再额外加上 `merge` 字样，
+ *   形如 `merge 增加ksbc table级别的lua化 #361226`，在 P4V Pending 列表里一眼能看出
+ *   是 merge 自哪个源改动、关联哪个 Redmine 单号.
+ *
+ * 不再生成 `[Cross Branch Merge] / Source / Target / User` 多行模板：
+ *   1. 多行模板在 P4V Pending 列表的首行会被截断，看不到源描述；
+ *   2. Source Change / Target 等信息可从 p4 integrate 的 Revision History 追溯，无需塞进描述；
+ *   3. 源描述里通常已带 Redmine 单号，加 `merge ` 前缀即满足「merge + 单号 + 描述」格式.
+ *
+ * 源描述为空时用 `merge <sourceChange>` 兜底，避免 p4 change -i 报 description missing.
  */
 export function buildPendingChangeDescription(params: {
   sourceBranch: string
@@ -635,16 +658,9 @@ export function buildPendingChangeDescription(params: {
   user: string
   sourceDescription: string
 }): string {
-  return [
-    '[Cross Branch Merge]',
-    `Source: ${params.sourceBranch}`,
-    `Source Change: ${params.sourceChange}`,
-    `Target: ${params.targetBranch}`,
-    `User: ${params.user}`,
-    '',
-    'Original Description:',
-    params.sourceDescription,
-  ].join('\n')
+  const desc = params.sourceDescription.trim()
+  if (desc) return `merge ${desc}`
+  return `merge ${params.sourceChange}`
 }
 
 /* ---------- Change spec 表单处理（创建 Pending CL）---------- */

@@ -6,6 +6,7 @@ import {
   buildPendingChangeDescription,
   buildResolveArgs,
   buildResolveOverrideArgs,
+  buildRevertArgs,
   buildSyncArgs,
   computeMergePreview,
   createInitialPipeline,
@@ -380,6 +381,20 @@ describe('buildResolveOverrideArgs', () => {
   })
 })
 
+describe('buildRevertArgs', () => {
+  it('构造 p4 -c <client> revert <files>（按 depot 路径 revert，不依赖 change 字段）', () => {
+    const args = buildRevertArgs({
+      targetClient: 'c_weekly',
+      files: ['//C7/Weekly/Client/A.lua', '//C7/Weekly/Client/B.json'],
+    })
+    expect(args).toEqual(['-c', 'c_weekly', 'revert', '//C7/Weekly/Client/A.lua', '//C7/Weekly/Client/B.json'])
+  })
+  it('单个文件也正常构造', () => {
+    const args = buildRevertArgs({ targetClient: 'c_preonline', files: ['//C7/Preonline/Server/C.lua'] })
+    expect(args).toEqual(['-c', 'c_preonline', 'revert', '//C7/Preonline/Server/C.lua'])
+  })
+})
+
 describe('buildSyncArgs', () => {
   it('File 模式只 sync 指定文件（默认）', () => {
     const args = buildSyncArgs({ targetClient: 'c_weekly', files: ['//C7/Weekly/a', '//C7/Weekly/b'] })
@@ -424,7 +439,7 @@ describe('dedupeCommonParentDirs', () => {
 })
 
 describe('buildPendingChangeDescription', () => {
-  it('按 spec §18 模板生成 Pending CL 描述', () => {
+  it('生成 `merge <源描述>` 格式，直接沿用源描述并加 merge 前缀', () => {
     const desc = buildPendingChangeDescription({
       sourceBranch: '//C7/Development/Mainline',
       sourceChange: 2132162,
@@ -432,13 +447,40 @@ describe('buildPendingChangeDescription', () => {
       user: 'chenzhixu',
       sourceDescription: '增加ksbc table级别的lua化',
     })
-    expect(desc).toContain('[Cross Branch Merge]')
-    expect(desc).toContain('Source: //C7/Development/Mainline')
-    expect(desc).toContain('Source Change: 2132162')
-    expect(desc).toContain('Target: //C7/Development/Weekly')
-    expect(desc).toContain('User: chenzhixu')
-    expect(desc).toContain('Original Description:')
-    expect(desc).toContain('增加ksbc table级别的lua化')
+    expect(desc).toBe('merge 增加ksbc table级别的lua化')
+  })
+
+  it('源描述含 Redmine 单号时保留单号，符合 `merge xxxx #单号 xxx` 形式', () => {
+    const desc = buildPendingChangeDescription({
+      sourceBranch: '//C7/Development/Mainline',
+      sourceChange: 2137156,
+      targetBranch: '//C7/Development/Preonline',
+      user: 'chenzhixu',
+      sourceDescription: '测试merge功能 #361226 【Online】',
+    })
+    expect(desc).toBe('merge 测试merge功能 #361226 【Online】')
+  })
+
+  it('源描述为空时用 `merge <sourceChange>` 兜底，避免 p4 change -i 报 description missing', () => {
+    const desc = buildPendingChangeDescription({
+      sourceBranch: '//C7/Development/Mainline',
+      sourceChange: 2137156,
+      targetBranch: '//C7/Development/Preonline',
+      user: 'chenzhixu',
+      sourceDescription: '',
+    })
+    expect(desc).toBe('merge 2137156')
+  })
+
+  it('源描述仅空白时同样兜底为 `merge <sourceChange>`', () => {
+    const desc = buildPendingChangeDescription({
+      sourceBranch: '//C7/Development/Mainline',
+      sourceChange: 2137156,
+      targetBranch: '//C7/Development/Preonline',
+      user: 'chenzhixu',
+      sourceDescription: '   \n  \t',
+    })
+    expect(desc).toBe('merge 2137156')
   })
 })
 

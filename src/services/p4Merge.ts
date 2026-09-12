@@ -148,6 +148,12 @@ export interface ExecuteMergeParams {
   files: { sourcePath: string; targetPath: string; sourceRevision?: number }[]
   /** Sync 模式：file（默认）= 只 sync CL 涉及文件；directory = sync 共同父目录 /... */
   syncMode: 'file' | 'directory'
+  /**
+   * 用户确认后置 true：Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge
+   * 涉及的文件时，会返回 needConfirm 让 UI 弹确认；用户确认后带此标志重跑，
+   * 主进程先 revert 这些重叠文件再继续 Sync/Integrate.
+   */
+  revertOverlapping?: boolean
 }
 
 export interface ExecuteResult {
@@ -155,6 +161,14 @@ export interface ExecuteResult {
   transactionId?: string
   targetChange?: number
   error?: string
+  /**
+   * Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge 涉及的文件，
+   * 需要用户确认是否 revert 这些文件后继续。UI 据此弹出确认 UI.
+   * 此时 ok 为 false、error 为提示文案，用户确认后带 revertOverlapping=true 重跑.
+   */
+  needConfirm?: boolean
+  /** needConfirm=true 时携带的重叠已打开文件列表（depot 路径 + change + action） */
+  overlappingOpened?: P4OpenedFile[]
 }
 
 export interface ProgressPayload {
