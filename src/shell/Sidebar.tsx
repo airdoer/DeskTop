@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { C7Logo } from '@/components/ui/C7Logo'
 import {
   ChevronDownIcon,
@@ -16,6 +16,7 @@ import {
   type NavLeaf,
   type RouteId,
 } from './navigation'
+import { QuickNavTrigger } from './QuickNavTrigger'
 
 /*
  * Sidebar — 应用主导航.
@@ -23,6 +24,11 @@ import {
  *   一级导航稳定，复杂功能通过二级展开处理。
  * §7 Compact Density：Sidebar Item 32-40px。
  * 视觉层级用 Background + 左侧 active indicator，不用 Shadow（§16）。
+ *
+ * 多 tab 协作（用户要求，类似 Chrome）：
+ *   - 普通点击 → 在当前 tab 内导航（替换当前 tab 的 routeId）；
+ *   - Ctrl/Shift + 点击 → 在新 tab 打开（追加到激活 tab 之后并切过去）。
+ *   修饰键判定在 captureModifier 中统一处理，鼠标与键盘事件共用一份逻辑。
  *
  * 支持整体收起为图标列（rail）：宽度 224px → 56px，只保留图标，label 走原生 title
  *   提示（nav 是 overflow-y-auto 容器，自定义气泡会被裁剪）。收起状态经 ui-prefs 持久化。
@@ -37,12 +43,21 @@ import {
  *   文字仍走 text-* 类，激活时为主色，保证「当前在哪一页」一眼可见。
  */
 
-interface SidebarProps {
-  active: RouteId
-  onNavigate: (id: RouteId) => void
+/** 是否带「开新 tab」修饰键（Ctrl 或 Shift） */
+function isOpenInNewTabModifier(event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): boolean {
+  // Ctrl/⌘+Click 或 Shift+Click 都视为「开新 tab」，与浏览器 a[target=_blank] 习惯一致
+  return event.ctrlKey || event.metaKey || event.shiftKey
 }
 
-export function Sidebar({ active, onNavigate }: SidebarProps) {
+interface SidebarProps {
+  active: RouteId
+  /** 导航回调；openInNewTab=true 时开新 tab，否则在当前 tab 内导航 */
+  onNavigate: (id: RouteId, openInNewTab: boolean) => void
+  /** 打开快捷跳转浮层（QuickNavPalette），状态由 AppShell 持有 */
+  onOpenQuickNav: () => void
+}
+
+export function Sidebar({ active, onNavigate, onOpenQuickNav }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set(DEFAULT_EXPANDED_GROUPS))
 
@@ -90,6 +105,14 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
     >
       <BrandHeader collapsed={collapsed} />
 
+      {/*
+        搜索或跳转入口（Ctrl+K）：放在 sidebar 最上面（BrandHeader 下方、主导航上方），
+        常驻可见，保证可发现性。收起态由 QuickNavTrigger 内部降级为纯图标按钮。
+      */}
+      <div className={`py-2 ${collapsed ? 'px-1.5' : 'px-2'}`}>
+        <QuickNavTrigger onClick={onOpenQuickNav} collapsed={collapsed} />
+      </div>
+
       <nav className="flex-1 min-h-0 overflow-y-auto py-2 px-2">
         <ul className="flex flex-col gap-0.5">
           {NAV_ITEMS.map((item) =>
@@ -99,7 +122,7 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
                 item={item}
                 collapsed={collapsed}
                 active={active === item.id}
-                onClick={() => onNavigate(item.id)}
+                onClick={(e) => onNavigate(item.id, isOpenInNewTabModifier(e))}
               />
             ) : (
               <GroupItem
@@ -124,7 +147,7 @@ export function Sidebar({ active, onNavigate }: SidebarProps) {
             item={FOOTER_NAV_ITEM}
             collapsed={collapsed}
             active={active === FOOTER_NAV_ITEM.id}
-            onClick={() => onNavigate(FOOTER_NAV_ITEM.id)}
+            onClick={(e) => onNavigate(FOOTER_NAV_ITEM.id, isOpenInNewTabModifier(e))}
           />
         </ul>
       </div>
@@ -192,7 +215,8 @@ function LeafItem({
   item: NavLeaf
   collapsed: boolean
   active: boolean
-  onClick: () => void
+  /** 点击回调；参数是原始鼠标事件，调用方可从中读修饰键决定是否开新 tab */
+  onClick: (event: ReactMouseEvent<HTMLElement>) => void
 }) {
   return (
     <li>
@@ -226,7 +250,7 @@ function GroupItem({
   activeChild: boolean
   activeId: RouteId
   onToggle: () => void
-  onNavigate: (id: RouteId) => void
+  onNavigate: (id: RouteId, openInNewTab: boolean) => void
 }) {
   return (
     <li>
@@ -258,7 +282,7 @@ function GroupItem({
               <li key={child.id} className="w-full">
                 <button
                   type="button"
-                  onClick={() => onNavigate(child.id)}
+                  onClick={(e) => onNavigate(child.id, isOpenInNewTabModifier(e))}
                   className={itemClass(active, false, collapsed)}
                   aria-current={active ? 'page' : undefined}
                   title={collapsed ? child.label : undefined}

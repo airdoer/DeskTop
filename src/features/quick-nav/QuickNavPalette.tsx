@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -25,6 +26,12 @@ import type { QuickNavEntry } from './entries'
  *   输入关键词 → ↑/↓ 循环选择 → Enter 或点击跳转 → Esc / 点击遮罩关闭。
  *   关闭后清空关键词与选中项，保证下次打开是干净状态。
  *
+ * 多 tab 协作（用户要求，类似 Chrome）：
+ *   - Enter / 普通 点击 → 在当前 tab 内导航；
+ *   - Ctrl/Shift + Enter → 开新 tab；
+ *   - Ctrl/Shift + 点击结果项 → 开新 tab。
+ *   底部提示行加了「Ctrl/Shift 开新 tab」说明，便于发现性。
+ *
  * 键盘事件分两处处理：↑/↓/Enter 挂在输入框上（它始终持有焦点），
  *   Esc 挂在 document 上——用户点击结果项后焦点可能落到 body，此时输入框收不到事件。
  */
@@ -33,8 +40,8 @@ interface QuickNavPaletteProps {
   open: boolean
   entries: readonly QuickNavEntry[]
   onClose: () => void
-  /** 选中某条目（跳转动作由 Shell 负责，本组件不感知路由实现） */
-  onSelect: (entry: QuickNavEntry) => void
+  /** 选中某条目；openInNewTab=true 时开新 tab，否则在当前 tab 内导航 */
+  onSelect: (entry: QuickNavEntry, openInNewTab: boolean) => void
 }
 
 export function QuickNavPalette({ open, entries, onClose, onSelect }: QuickNavPaletteProps) {
@@ -86,11 +93,15 @@ export function QuickNavPalette({ open, entries, onClose, onSelect }: QuickNavPa
     return () => document.removeEventListener('keydown', handleKeyDown, false)
   }, [open, onClose])
 
+  /** 是否带「开新 tab」修饰键（Ctrl/⌘ 或 Shift） */
+  const isOpenInNewTab = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): boolean =>
+    e.ctrlKey || e.metaKey || e.shiftKey
+
   const commit = useCallback(
-    (entry: QuickNavEntry | undefined) => {
+    (entry: QuickNavEntry | undefined, openInNewTab: boolean) => {
       if (!entry) return
       onClose()
-      onSelect(entry)
+      onSelect(entry, openInNewTab)
     },
     [onClose, onSelect],
   )
@@ -110,7 +121,7 @@ export function QuickNavPalette({ open, entries, onClose, onSelect }: QuickNavPa
       // 中文输入法确认候选词同样会发出 Enter，此时不应触发跳转
       if (event.nativeEvent.isComposing) return
       event.preventDefault()
-      commit(results[activeIndex]?.item)
+      commit(results[activeIndex]?.item, isOpenInNewTab(event.nativeEvent))
     }
   }
 
@@ -173,7 +184,9 @@ export function QuickNavPalette({ open, entries, onClose, onSelect }: QuickNavPa
                   role="option"
                   aria-selected={active}
                   onMouseEnter={() => setActiveIndex(index)}
-                  onClick={() => commit(entry)}
+                  onClick={(event: ReactMouseEvent<HTMLDivElement>) =>
+                    commit(entry, isOpenInNewTab(event))
+                  }
                   className={`flex h-8 cursor-pointer items-center gap-2 px-3 ${
                     active ? 'bg-surface-active' : ''
                   }`}
@@ -217,6 +230,11 @@ export function QuickNavPalette({ open, entries, onClose, onSelect }: QuickNavPa
           <span className="flex items-center gap-1">
             <Kbd>Enter</Kbd>
             跳转
+          </span>
+          <span className="flex items-center gap-1">
+            <Kbd>Ctrl</Kbd>
+            <Kbd>Shift</Kbd>
+            开新 tab
           </span>
           <span className="ml-auto">Ctrl + K 唤起</span>
         </div>

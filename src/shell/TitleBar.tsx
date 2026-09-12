@@ -4,7 +4,6 @@ import {
   MaximizeIcon,
   MinimizeIcon,
   RestoreIcon,
-  SearchIcon,
 } from '@/components/ui/icons'
 import { Greeting, useGreeting } from '@/features/greeting/Greeting'
 import {
@@ -14,40 +13,75 @@ import {
   subscribeMaximizedChanged,
   toggleMaximizeWindow,
 } from '@/services/sso'
+import { TabBar } from './TabBar'
 import { UserMenu } from './UserMenu'
 import { useSsoSession } from './ssoSessionContext'
+import type { Tab } from './tabs/tabTypes'
 
 /*
  * TitleBar — 自定义标题栏（无原生 titleBarOverlay）.
  * 依据 docs/UI_DESIGN_SYSTEM.md §3/§4：Shell 统一提供标题栏。
  *
- * 布局：[快捷跳转入口] [拖拽区（问候语右对齐贴住 Persona）…] [按钮组：UserMenu | 最小化 | 最大化/还原 | 关闭]
+ * 布局（与 Chrome 类似，标签栏嵌入标题栏）：
+ *   [TabBar … 拖拽区（问候语右对齐贴住 Persona）…] [按钮组：UserMenu | 最小化 | 最大化/还原 | 关闭]
  *   - 整条高度 36px，与 electron/main/index.ts 的 TITLE_BAR_HEIGHT 保持一致
- *   - 除快捷跳转入口与按钮组外为窗口拖拽区（app-region-drag），双击自动最大化（Chromium 行为）
- *   - 入口与按钮组均为 app-region-no-drag，确保可点击
+ *   - TabBar 与按钮组为 app-region-no-drag，确保可点击；其余为窗口拖拽区
+ *   - TabBar 的空白处（标签之间或末尾）由 TabBar 内部 app-region-drag 接管窗口拖拽
  *   - 登录用户按钮位于最小化/最大化/关闭按钮的最左侧（用户要求）
  *
- * 快捷跳转入口（§22 Ctrl+K / §23 Command Palette）：常驻显示，不依赖 hover——
- *   仅靠快捷键的功能缺少可发现入口，用户不会知道它存在。窗口收窄到 lg 以下时只留图标。
+ * 布局修复（2026-09）：TabBar 用 flex-1 独占剩余空间，问候语区 shrink-0 按内容宽度，
+ *   避免「TabBar 与问候语区各 flex-1 平分」导致 TabBar 中段截断、右侧空白的 bug.
  *
- * 问候语（docs/GREETING_SPEC.md §3.1）：位于 User Persona 左侧，属被动辅助信息，
- *   不参与拖拽之外的交互——它随拖拽区一起拖动，不是按钮，不进入 Tab 顺序。
- *   仅登录后显示（AC-01 前提为已登录，且 §13 要求与 Persona 同组呈现）。
- *
- * 最大化状态由主进程主动推送（window:maximized-changed），切换「最大化/还原」图标。
- * SSO session 由 SsoSessionContext 统一管理，UserMenu 内部直接读取 context，
- *   本组件不持有 session 本地状态（仅读取登录态用于问候语开关）。
+ * 多 tab 退让（用户要求）：tab 增多导致横向空间紧张时，按「可牺牲性」依次让出：
+ *   1. 问候语最先让出（被动辅助信息，GREETING_SPEC §20 已规定它是可牺牲项）；
+ *   2. 其次让出 UserMenu 的「图标 + 用户名」，只留绿色状态圆点；
+ *   3. 最后连圆点也让出，把全部空间给 TabBar。
+ * 阈值用 tab 数量而非窗口宽度：tab 数量是「用户能直观看到有几条」的直接因果，
+ *   而窗口宽度需额外 ResizeObserver，且用户拉伸窗口时 tab 宽度本就会变（overflow-x-auto 兜底）。
  */
 
 /** 与 electron/main/index.ts 的 TITLE_BAR_HEIGHT 保持一致 */
 const TITLE_BAR_HEIGHT = 36
 
+/*
+ * 退让阈值：tab 数量到达几条时依次隐藏问候语 / UserMenu 主体 / 状态圆点.
+ * 阈值取值依据：默认窗口宽 1200，TabBar 每个 tab min-w-[120px]，
+ *   - 6 条 tab ≈ 720px，加按钮组约 200px + UserMenu 完整 160px ≈ 1080，问候语挤不下 → 隐问候语；
+ *   - 9 条 tab ≈ 1080px，加按钮组 + UserMenu 完整 ≈ 1440 > 1200 → UserMenu 只留圆点（省 ~120px）；
+ *   - 12 条 tab ≈ 1440px，连圆点都挤掉，TabBar 拿满 1200 - 200(按钮组) ≈ 1000 仍需横向滚动.
+ * 实际有 overflow-x-auto 兜底，阈值只控制「何时让出辅助元素」，不影响 tab 可达性.
+ */
+const GREETING_HIDE_THRESHOLD = 6
+const USERMENU_COMPACT_THRESHOLD = 9
+const USERMENU_HIDE_THRESHOLD = 12
+
 interface TitleBarProps {
-  /** 打开快捷跳转浮层（状态由 AppShell 持有） */
-  onOpenQuickNav?: () => void
+  /** Tab 列表（由 AppShell 持有，TitleBar 只渲染 + 回调） */
+  tabs: Tab[]
+  activeTabId: string
+  onSelectTab: (tabId: string) => void
+  onCloseTab: (tabId: string) => void
+  onReorderTabs: (from: number, to: number) => void
+  onCloseLeftTabs: (tabId: string) => void
+  onCloseRightTabs: (tabId: string) => void
+  onCloseOtherTabs: (tabId: string) => void
+  onCloseAllTabs: () => void
+  /** 循环切换激活 tab（滚轮 / Ctrl+Tab），step > 0 向右、< 0 向左 */
+  onCycleTab: (step: number) => void
 }
 
-export function TitleBar({ onOpenQuickNav }: TitleBarProps) {
+export function TitleBar({
+  tabs,
+  activeTabId,
+  onSelectTab,
+  onCloseTab,
+  onReorderTabs,
+  onCloseLeftTabs,
+  onCloseRightTabs,
+  onCloseOtherTabs,
+  onCloseAllTabs,
+  onCycleTab,
+}: TitleBarProps) {
   const [maximized, setMaximized] = useState(false)
   const { session, loggedIn } = useSsoSession()
 
@@ -76,33 +110,47 @@ export function TitleBar({ onOpenQuickNav }: TitleBarProps) {
     return subscribeMaximizedChanged((value) => setMaximized(value))
   }, [])
 
+  // 多 tab 退让：根据 tab 数量决定各辅助元素的可见性
+  const tabCount = tabs.length
+  const showGreeting = tabCount < GREETING_HIDE_THRESHOLD
+  const userMenuMode: 'full' | 'compact' | 'hidden' =
+    tabCount >= USERMENU_HIDE_THRESHOLD
+      ? 'hidden'
+      : tabCount >= USERMENU_COMPACT_THRESHOLD
+        ? 'compact'
+        : 'full'
+
   return (
     <div
       className="app-region-drag flex items-stretch shrink-0 bg-surface-2 border-b border-border-subtle select-none"
       style={{ height: TITLE_BAR_HEIGHT }}
     >
-      {/* 左侧：快捷跳转入口（常驻，保证功能可发现） */}
-      <div className="app-region-no-drag flex items-center pl-2">
-        <QuickNavTrigger onClick={onOpenQuickNav} />
-      </div>
+      {/* 左侧：TabBar（独占剩余空间，内部 overflow-x-auto 兜底横向滚动） */}
+      <TabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onSelect={onSelectTab}
+        onClose={onCloseTab}
+        onReorder={onReorderTabs}
+        onCloseLeft={onCloseLeftTabs}
+        onCloseRight={onCloseRightTabs}
+        onCloseOthers={onCloseOtherTabs}
+        onCloseAll={onCloseAllTabs}
+        onCycle={onCycleTab}
+      />
 
-      {/* 拖拽区占满中间；问候语右对齐贴住 Persona */}
-      <div className="flex-1 min-w-0 flex items-center justify-end">
-        {greeting && (
-          /*
-           * 响应式（GREETING_SPEC §20）：问候语是「可牺牲信息」，窗口收窄时最先隐藏。
-           * 窗口 minWidth=960（electron/main/index.ts），Tailwind 默认 md(768px) 永不生效，
-           * 故用 lg(1024px)：默认窗口宽 1200 可见，收窄到 1024 以下让位给 Persona 与窗口按钮。
-           */
+      {/* 拖拽区：按内容宽度，被 TabBar 挤到右边；仅在有问候语时占位 */}
+      {showGreeting && greeting && (
+        <div className="flex items-center justify-end shrink-0">
           <span className="hidden lg:flex items-center min-w-0 pr-3">
             <Greeting message={greeting.text} />
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 右侧按钮组：登录用户 | 最小化 | 最大化/还原 | 关闭 */}
       <div className="app-region-no-drag flex items-stretch">
-        <UserMenu />
+        {userMenuMode !== 'hidden' && <UserMenu mode={userMenuMode} />}
         <WindowButton onClick={() => void minimizeWindow()} title="最小化" ariaLabel="最小化">
           <MinimizeIcon size={11} />
         </WindowButton>
@@ -123,29 +171,6 @@ export function TitleBar({ onOpenQuickNav }: TitleBarProps) {
         </WindowButton>
       </div>
     </div>
-  )
-}
-
-/**
- * 快捷跳转入口：常驻的搜索样式按钮，点击等价于 Ctrl+K。
- * 文案在 lg 以下隐藏（窗口 minWidth=960，md 断点永不生效），窄窗时退化为纯图标按钮。
- */
-function QuickNavTrigger({ onClick }: { onClick?: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title="快捷跳转（Ctrl+K）"
-      aria-label="快捷跳转"
-      aria-keyshortcuts="Control+K"
-      className="flex h-6 items-center gap-1.5 rounded-md border border-border-subtle bg-surface-1 pl-2 pr-1.5 text-foreground-tertiary transition-colors hover:border-border hover:bg-surface-hover hover:text-foreground-secondary"
-    >
-      <SearchIcon size={13} aria-hidden />
-      <span className="hidden lg:inline text-[12px] leading-4">搜索或跳转</span>
-      <span className="hidden lg:inline-flex h-4 min-w-[16px] items-center justify-center rounded-sm border border-border bg-surface-3 px-1 text-[10px] font-medium leading-none">
-        Ctrl K
-      </span>
-    </button>
   )
 }
 

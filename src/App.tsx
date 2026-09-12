@@ -18,18 +18,23 @@ import { P4PathPage } from '@/pages/p4/P4PathPage'
  *
  * 路由与侧边栏页签一一对应（见 src/shell/navigation.ts）：
  *   主页 + 7 个平级功能页签 + 设置（设置入口固定在侧边栏底部，不是页签）。
+ *
+ * pages 是「渲染函数」而非「ReactNode」：多 tab 导航下，两个 tab 可能指向同一
+ *   路由（如两个 home tab），若值是 ReactNode，它们会共享同一组件实例（state 串）。
+ *   改成函数后，每个 tab 调用一次得到独立元素，配合 TabPane 的 key=tab.id，
+ *   React 视为两个独立实例，state 互不干扰（见 src/shell/TabPane.tsx）。
  */
 
-const pages: Partial<Record<RouteId, ReactNode>> = {
-  home: <HomePage />,
-  'system-info': <SystemInfoPage />,
-  'quick-dirs': <QuickDirsPage />,
-  'p4-workspaces': <P4WorkspacesPage />,
-  redmine: <RedminePage />,
-  websites: <WebsitesPage />,
-  'p4-merge': <P4MergePage />,
-  'p4-path': <P4PathPage />,
-  settings: <SettingsPage />,
+const pages: Partial<Record<RouteId, () => ReactNode>> = {
+  home: () => <HomePage />,
+  'system-info': () => <SystemInfoPage />,
+  'quick-dirs': () => <QuickDirsPage />,
+  'p4-workspaces': () => <P4WorkspacesPage />,
+  redmine: () => <RedminePage />,
+  websites: () => <WebsitesPage />,
+  'p4-merge': () => <P4MergePage />,
+  'p4-path': () => <P4PathPage />,
+  settings: () => <SettingsPage />,
 }
 
 function App() {

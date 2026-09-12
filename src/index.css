@@ -140,6 +140,18 @@
 }
 
 /*
+ * TabBar 横向滚动条：隐藏但保留滚动能力（鼠标滚轮 / 触摸板 / 拖拽）。
+ * 标签栏嵌在 36px 高的 TitleBar 里，默认 8px 滚动条会挤占 tab 高度，
+ * 且标签栏的滚动条在视觉上与窗口控制按钮太近，显眼但无用，故隐藏。
+ */
+.tabbar-scroll {
+  scrollbar-width: none;
+}
+.tabbar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/*
  * Cross Branch Merge：Source → Target 流动箭头的 dash 流动动画.
  * 用 stroke-dashoffset 持续负向偏移，让虚线从左向右流动，表达 Merge 方向感.
  * 只在两端 workspace 都已选择且不重复时启用（active），否则静态低对比度提示.

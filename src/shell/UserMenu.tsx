@@ -15,12 +15,24 @@ import { useSsoSession } from './ssoSessionContext'
  * session / login / logout 由 SsoSessionContext 统一提供，本组件不再持有 session 本地状态。
  * SSO 登录流程详见 electron/main/sso.ts：渲染层调 sso Service → 主进程弹子窗口加载 SSO
  *   登录页 → 拦截重定向拿 ticket → 调 /cas/serviceValidate 校验 → 持久化 session。
+ *
+ * mode（多 tab 退让，由 TitleBar 根据 tab 数量传入）：
+ *   - 'full'：圆点 + 用户图标 + 用户名（默认，tab 少时）
+ *   - 'compact'：仅圆点（tab 多到挤压时，让出图标与用户名给 TabBar）
+ *   compact 下仍可点击展开下拉菜单，功能不丢，只是首屏只看到一个状态点.
  */
 
-export function UserMenu() {
+type UserMenuMode = 'full' | 'compact'
+
+interface UserMenuProps {
+  mode?: UserMenuMode
+}
+
+export function UserMenu({ mode = 'full' }: UserMenuProps) {
   const { session, loggedIn, login, logout, loggingIn, loggingOut } = useSsoSession()
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const compact = mode === 'compact'
 
   // 点击外部关闭下拉菜单
   useEffect(() => {
@@ -78,24 +90,28 @@ export function UserMenu() {
         type="button"
         onClick={loggedIn ? () => setOpen((v) => !v) : handleLogin}
         disabled={loggingIn}
-        className={`app-region-no-drag flex items-center gap-1.5 h-full px-3 text-[12px] leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:bg-surface-hover ${
-          loggedIn ? 'text-foreground-secondary hover:text-foreground' : 'text-error hover:text-error'
-        }`}
+        className={`app-region-no-drag flex items-center gap-1.5 h-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:bg-surface-hover ${
+          compact ? 'px-2' : 'px-3 text-[12px] leading-none'
+        } ${loggedIn ? 'text-foreground-secondary hover:text-foreground' : 'text-error hover:text-error'}`}
         title={loggedIn ? session?.username ?? '已登录' : '未登录，点击登录'}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={loggedIn ? `当前用户：${session?.username ?? ''}` : '未登录，点击登录'}
       >
-        {/* 状态圆点：未登录红、已登录绿 */}
+        {/* 状态圆点：未登录红、已登录绿（compact 模式下唯一可见元素） */}
         <span
           className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotColor}`}
           title={dotTitle}
           aria-hidden
         />
-        <UserIcon size={14} />
-        <span className="truncate max-w-[120px]">
-          {loggingIn ? '登录中…' : loggedIn ? (session?.username ?? '') : '登录'}
-        </span>
+        {!compact && (
+          <>
+            <UserIcon size={14} />
+            <span className="truncate max-w-[120px]">
+              {loggingIn ? '登录中…' : loggedIn ? (session?.username ?? '') : '登录'}
+            </span>
+          </>
+        )}
       </button>
 
       {loggedIn && open && (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Panel } from '@/components/layout/Panel'
 import { NavIcon } from '@/shell/NavIcon'
+import { useTabState } from '@/shell/tabs/TabContext'
 import { AppButton } from '@/components/ui/AppButton'
 import { AppInput } from '@/components/ui/AppInput'
 import {
@@ -41,9 +42,17 @@ export function PathConvertPanel() {
   const [snapshot, setSnapshot] = useState<P4WorkspaceSnapshot | null>(null)
   const [labels, setLabels] = useState<WorkspaceLabels>(() => ({}))
   const [loading, setLoading] = useState(true)
-  const [input, setInput] = useState('')
+  // 已选元素（输入路径）经 TabContext 持久化：切换 tab / 关闭 tab / Ctrl+Shift+T 恢复时
+  // 都能保留输入内容，避免用户切走再切回要重新粘贴长路径。
+  const [preservedInput, setPreservedInput] = useTabState<{ input: string }>()
+  const [input, setInput] = useState(preservedInput?.input ?? '')
   /** 正在执行打开动作的条目 key，用于按钮内 loading */
   const [busyKey, setBusyKey] = useState<string | null>(null)
+
+  // 输入变化时写回 TabContext（让 tab 关闭时随 tab 进 closedStack，Ctrl+Shift+T 恢复时还原）
+  useEffect(() => {
+    setPreservedInput({ input })
+  }, [input, setPreservedInput])
 
   const load = useCallback(async () => {
     setLoading(true)
