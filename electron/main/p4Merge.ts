@@ -508,21 +508,33 @@ export function computeMergePreview(params: {
 /* ---------- 命令构造 ---------- */
 
 /**
- * 构造 `p4 -c <targetClient> integrate -c <targetChange> -o <source>#<rev> <target>` 参数.
+ * 构造 `p4 -c <targetClient> integrate -c <targetChange> <source>#<rev> <target>` 参数（单文件）.
  * spec §17：优先 `p4 integrate -c <targetPendingChange> ...` 让结果直接进入 Pending CL.
+ *
+ * 坑（踩过，勿改回）：**p4 integrate 的 `fromFile toFile` 形式一次只接受一对具体文件**，
+ *   不能把多对 `source#rev target` 塞进同一条命令——p4 会解析失败并打印 Usage 帮助、
+ *   非 0 退出。Perforce 官方文档明确：要指定多个文件必须用通配符（`...`/`*`），
+ *   且 fromFile 与 toFile 的通配符必须一一对应。跨分支 Merge 的文件往往分散在多个目录，
+ *   无法用通配符安全覆盖，因此采用「逐文件执行 integrate」的最稳妥策略，由调用方循环
+ *   调用本函数（见 ipc.ts Step 4）.
+ *
  * 这里只构造参数数组，executable 与环境变量由 P4Service 注入.
  */
 export function buildIntegrateArgs(params: {
   targetClient: string
   targetChange: string
-  files: { sourcePath: string; targetPath: string; sourceRevision?: number }[]
+  file: { sourcePath: string; targetPath: string; sourceRevision?: number }
 }): string[] {
-  const args = ['-c', params.targetClient, 'integrate', '-c', params.targetChange]
-  for (const f of params.files) {
-    const revSuffix = f.sourceRevision ? `#${f.sourceRevision}` : ''
-    args.push(`${f.sourcePath}${revSuffix}`, f.targetPath)
-  }
-  return args
+  const revSuffix = params.file.sourceRevision ? `#${params.file.sourceRevision}` : ''
+  return [
+    '-c',
+    params.targetClient,
+    'integrate',
+    '-c',
+    params.targetChange,
+    `${params.file.sourcePath}${revSuffix}`,
+    params.file.targetPath,
+  ]
 }
 
 /**

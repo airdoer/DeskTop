@@ -1425,27 +1425,49 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         pushLog('pending', `Pending CL #${targetChange} 已创建`)
         setStep('pending', { status: 'success', endedAt: Date.now() })
 
-        /* Step 4: Integrate —— p4 integrate -c <targetChange> <source>#<rev> <target> */
+        /* Step 4: Integrate —— 逐文件执行 p4 integrate -c <targetChange> <source>#<rev> <target>
+         * 原因：p4 integrate 的 `fromFile toFile` 形式一次只接受一对具体文件（见
+         * buildIntegrateArgs 注释），多对路径塞同一条命令会让 p4 解析失败并打印 Usage.
+         * 逐文件执行虽启动多次 p4 进程，但跨分支 Merge 文件数通常很少（几个到几十个），
+         * 且能精确定位失败文件，符合 spec §29/§44「不自动 submit/revert」的半自动定位. */
         setStep('integrate', { status: 'running', startedAt: Date.now() })
-        const integrateArgs = buildIntegrateArgs({
-          targetClient,
-          targetChange: String(targetChange),
-          files: payload.files,
-        })
-        pushLog('integrate', `p4 -c ${targetClient} integrate -c ${targetChange} (${payload.files.length} files)`)
-        const integRes = await runP4Cancellable(p4, integrateArgs, {
-          timeout: P4_MERGE_INTEGRATE_TIMEOUT_MS,
-          signal: controller.signal,
-        })
-        if (integRes.aborted) {
-          setStep('integrate', { status: 'failed', error: '已取消', endedAt: Date.now() })
-          return { ok: false, transactionId, error: '已取消', targetChange }
+        pushLog('integrate', `p4 -c ${targetClient} integrate -c ${targetChange} (${payload.files.length} files, 逐文件执行)`)
+        let integrateError: { file: string; message: string } | null = null
+        let integrateOkCount = 0
+        for (const file of payload.files) {
+          const integrateArgs = buildIntegrateArgs({
+            targetClient,
+            targetChange: String(targetChange),
+            file,
+          })
+          const integRes = await runP4Cancellable(p4, integrateArgs, {
+            timeout: P4_MERGE_INTEGRATE_TIMEOUT_MS,
+            signal: controller.signal,
+          })
+          if (integRes.aborted) {
+            setStep('integrate', { status: 'failed', error: '已取消', endedAt: Date.now() })
+            return { ok: false, transactionId, error: '已取消', targetChange }
+          }
+          if (integRes.exitCode !== 0) {
+            const msg = summarizeP4Error(integRes.stderr || integRes.stdout)
+            pushLog('integrate', `✗ ${file.targetPath} — ${msg}`)
+            integrateError = { file: file.targetPath, message: msg }
+            break
+          }
+          integrateOkCount += 1
+          pushLog('integrate', `✓ ${file.targetPath}`)
         }
-        if (integRes.exitCode !== 0) {
-          setStep('integrate', { status: 'failed', error: shortenP4Error(integRes.stderr || integRes.stdout), endedAt: Date.now() })
-          return { ok: false, transactionId, error: `Integrate 失败：${shortenP4Error(integRes.stderr || integRes.stdout)}`, targetChange }
+        if (integrateError) {
+          const failMsg = `${integrateError.file} — ${integrateError.message}`
+          setStep('integrate', { status: 'failed', error: failMsg, endedAt: Date.now() })
+          return {
+            ok: false,
+            transactionId,
+            error: `Integrate 失败：${failMsg}（已成功 ${integrateOkCount}/${payload.files.length}）`,
+            targetChange,
+          }
         }
-        pushLog('integrate', 'Integrate 完成')
+        pushLog('integrate', `Integrate 完成（${payload.files.length} 个文件）`)
         setStep('integrate', { status: 'success', endedAt: Date.now() })
 
         /* Step 5: Resolve —— 文本走 p4 resolve -am，二进制走 p4 resolve -as 覆盖（spec §26 + §22 Binary 覆盖策略） */
