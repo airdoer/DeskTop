@@ -1,0 +1,34 @@
+[Unit]
+Description=DeskTop release channel (static HTTP for electron-updater)
+Documentation=file:/data/chenzhixu/DeskTop-release/deploy/DEPLOY_RELEASE_SERVER.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chenzhixu
+Group=chenzhixu
+WorkingDirectory=/data/chenzhixu/DeskTop-release
+
+# 只服务 GET/HEAD，不需要任何写权限，因此可以收得比较紧。
+ExecStart=/usr/bin/python3 /data/chenzhixu/DeskTop-release/deploy/serve-release.py --root /data/chenzhixu/DeskTop-release --bind 0.0.0.0 --port 9090
+
+Restart=on-failure
+RestartSec=3
+
+# --- 加固 ---
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

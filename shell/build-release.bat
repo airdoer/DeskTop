@@ -12,6 +12,24 @@ echo  Build [1/3] NSIS installer
 echo ============================================
 echo Version : %VERSION%
 
+rem publish.url 基本校验：地址写错时打包本身不会报错，但所有客户端检查更新都会 404，
+rem 且失败发生在用户机器上、本地难以察觉，所以在这里提前拦截。
+rem （与发布脚本 publish.bat 的一致性校验互补：那里比对的是「脚本配置 vs 打包配置」。）
+for /f "delims=" %%i in ('node -p "require('./electron-builder.json').publish.url"') do set "PUBLISH_URL=%%i"
+if not defined PUBLISH_URL (
+    echo [ERROR] publish.url is empty in electron-builder.json.
+    pause
+    exit /b 1
+)
+echo %PUBLISH_URL% | findstr /B /C:"http://" /C:"https://" >nul
+if errorlevel 1 (
+    echo [ERROR] publish.url must be an http(s) URL, got: %PUBLISH_URL%
+    pause
+    exit /b 1
+)
+echo Publish : %PUBLISH_URL%
+echo.
+
 echo [1/3] Preparing output directory ...
 call "%~dp0_prepare-out.bat" "%OUT_BASE%"
 echo Output  : %PROJECT_DIR%\%OUT%
