@@ -10,6 +10,7 @@
  */
 
 import { deriveDirectoryColor } from './quickDirectories'
+import { getSsoSession } from './sso'
 
 export interface P4Workspace {
   /** client 名，如 chenzhixu_C7_Mainline */
@@ -161,6 +162,10 @@ export interface P4VConnection {
  *
  * target：要定位的文件/目录，本地路径或 depot 路径，对应 p4vc 的 -s。
  * 不传则只打开工作区窗口。
+ *
+ * 连接用户优先用 SSO 登录用户名：本机 P4USER 可能被异常配置成别人（如共用机器），
+ * 直接透传会导致 P4V 用错用户打开，Pending 面板「Current User」显示成别人的名字。
+ * SSO 登录态由 AppShell 顶层保证（未登录会被 LoginGate 拦截），此处仅作防御性 fallback。
  */
 export async function openInP4V(
   client: string,
@@ -168,10 +173,18 @@ export async function openInP4V(
   target?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
+    // 优先用 SSO 登录用户名，避免 P4USER 异常导致 P4V 用错用户
+    let user = conn.user
+    try {
+      const session = await getSsoSession()
+      if (session?.username) user = session.username
+    } catch {
+      /* SSO 不可用时保留 conn.user（P4USER），不阻断打开 P4V */
+    }
     const result = await window.ipcRenderer.invoke('p4:open-p4v', {
       client,
       port: conn.port,
-      user: conn.user,
+      user,
       charset: conn.charset,
       target,
     })
