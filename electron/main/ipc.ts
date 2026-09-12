@@ -29,6 +29,8 @@ import {
   parseDescribeOutput,
   parseOpenedOutput,
   parseTaggedChanges,
+  replaceChangeFormDescription,
+  summarizeP4Error,
   type BranchMapping,
   type MergePreview,
   type MergeTool,
@@ -1248,7 +1250,10 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     win.webContents.send('p4-merge:progress', { transactionId, step, patch })
   }
 
-  /** 创建 Pending Changelist：`p4 -c <client> change -o` 取模板 → 改 description → `p4 change -i` */
+  /**
+   * 创建 Pending Changelist：`p4 -c <client> change -o` 取模板 → 替换 Description → `p4 change -i`.
+   * 注意 Description 是模板**最后一个**字段，替换方式见 replaceChangeFormDescription 的注释.
+   */
   async function createPendingChange(
     p4: string,
     client: string,
@@ -1263,16 +1268,22 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       if (outForm.aborted || outForm.exitCode !== 0) {
         return { ok: false, error: shortenP4Error(outForm.stderr || outForm.stdout || 'p4 change -o 失败') }
       }
-      // 在 -o 输出中替换 Description 字段；保留其余字段（Files 等由 -i 时自动忽略）
       const form = outForm.stdout
-      const replaced = form.replace(/^Description:\s*[\s\S]*?(?=\n[A-Za-z]+:)/m, `Description:\n\t${description.replace(/\n/g, '\n\t')}\n`)
+      const replaced = replaceChangeFormDescription(form, description)
+      // 原样返回 = 模板里没找到 Description 字段；此时回灌必然报
+      // "Error in change specification."，提前给出可定位的错误
+      if (replaced === form) {
+        return { ok: false, error: 'p4 change -o 模板中未找到 Description 字段，无法创建 Pending CL' }
+      }
       const submit = await runP4Cancellable(p4, ['-c', client, 'change', '-i'], {
         timeout: P4_MERGE_CHANGE_TIMEOUT_MS,
         signal,
         stdin: replaced,
       })
       if (submit.aborted || submit.exitCode !== 0) {
-        return { ok: false, error: shortenP4Error(submit.stderr || submit.stdout || 'p4 change -i 失败') }
+        // p4 首行常是笼统的 "Error in change specification."，真正原因在最后一行
+        const detail = summarizeP4Error(submit.stderr || submit.stdout) || 'p4 change -i 失败'
+        return { ok: false, error: detail }
       }
       // 输出："Change <num> created."
       const m = submit.stdout.match(/Change\s+(\d+)\s+created/i)
@@ -1405,8 +1416,10 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         pushLog('pending', `创建 Pending CL：[Cross Branch Merge] ${payload.sourceChange}`)
         const pendingRes = await createPendingChange(p4, targetClient, desc, controller.signal)
         if (!pendingRes.ok || !pendingRes.change) {
-          setStep('pending', { status: 'failed', error: pendingRes.error ?? '创建 Pending CL 失败', endedAt: Date.now() })
-          return { ok: false, transactionId, error: pendingRes.error ?? '创建 Pending CL 失败' }
+          const reason = pendingRes.error ?? '创建 Pending CL 失败'
+          pushLog('pending', `创建失败：${reason}`)
+          setStep('pending', { status: 'failed', error: reason, endedAt: Date.now() })
+          return { ok: false, transactionId, error: reason }
         }
         const targetChange = pendingRes.change
         pushLog('pending', `Pending CL #${targetChange} 已创建`)

@@ -635,6 +635,48 @@ export function buildPendingChangeDescription(params: {
   ].join('\n')
 }
 
+/* ---------- Change spec 表单处理（创建 Pending CL）---------- */
+
+/**
+ * 把 `p4 change -o` 模板中的 Description 字段替换为指定描述，返回可回灌 `p4 change -i` 的文本.
+ *
+ * 坑（踩过，勿改回）：**Description 是模板的最后一个字段**，其后不再有 `Field:` 行，
+ *   所以不能用 `(?=\n[A-Za-z]+:)` 这种「下一个字段」前瞻 —— 该前瞻永远不成立，
+ *   `String.replace` 会**静默不生效**，提交的仍是模板占位符 `<enter description here>`，
+ *   p4 于是报 `Error in change specification. / Change description missing.`.
+ *
+ * 做法：定位 `Description:` 行，丢弃其后全部内容（含占位行与尾部空行），再写入描述；
+ *   描述每行统一补一个 tab 缩进（p4 spec 的续行约定，未缩进的行会被当成新字段名），
+ *   末尾补一个空行结束；行尾风格沿用模板本身（Windows 下 p4 给的是 CRLF）.
+ *
+ * 找不到 Description 字段时原样返回（调用方需据此判错，不要直接回灌）.
+ */
+export function replaceChangeFormDescription(form: string, description: string): string {
+  const lines = form.split(/\r?\n/)
+  const idx = lines.findIndex((line) => /^Description:/.test(line))
+  if (idx < 0) return form
+  const eol = form.includes('\r\n') ? '\r\n' : '\n'
+  const body = description.replace(/\r/g, '').split('\n').map((line) => `\t${line}`)
+  return [...lines.slice(0, idx), 'Description:', ...body, '', ''].join(eol)
+}
+
+/**
+ * 汇总 p4 的多行报错为单条可读信息.
+ * p4 常先打一行通用错误、再打具体原因，例如创建 CL 失败时：
+ *   "Error in change specification."
+ *   "Error detected at line 31."
+ *   "Change description missing.  You must enter one."
+ * 只取首行会丢掉真正的原因（首行毫无信息量），因此取「首个非空行 + 最后一行」，
+ * 中间的过程性提示（Error detected at line N）省略.
+ */
+export function summarizeP4Error(raw: string): string {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) return ''
+  const first = lines[0]
+  const last = lines[lines.length - 1]
+  return first === last ? first : `${first} / ${last}`
+}
+
 /* ---------- Pipeline 状态模型 ---------- */
 
 export type PipelineStepId = 'preflight' | 'sync' | 'pending' | 'integrate' | 'resolve' | 'result'

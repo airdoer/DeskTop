@@ -20,7 +20,9 @@ import {
   parseOpenedOutput,
   parseTaggedChanges,
   PIPELINE_STEP_ORDER,
+  replaceChangeFormDescription,
   resolveMergeToolArgs,
+  summarizeP4Error,
 } from '../electron/main/p4Merge'
 import {
   buildRedmineIssueUrl,
@@ -518,6 +520,100 @@ describe('parseOpenedOutput 的「无已打开文件」文案', () => {
       change: 'default',
       client: 'chenzhixu_C7_Weekly',
     })
+  })
+})
+
+/*
+ * `p4 change -o` 的真实模板（本机 p4 -c chenzhixu_C7_Weekly change -o 输出，CRLF 行尾）.
+ * 关键：**Description 是最后一个字段**，其后只有占位行与一个空行，没有其它 `Field:` 行.
+ */
+const P4_CHANGE_FORM = [
+  '# A Perforce Change Specification.',
+  '#',
+  '#  Description: Comments about the changelist.  Required.',
+  '',
+  'Change:\tnew',
+  '',
+  'Client:\tchenzhixu_C7_Weekly',
+  '',
+  'User:\tchenzhixu',
+  '',
+  'Status:\tnew',
+  '',
+  'Description:',
+  '\t<enter description here>',
+  '',
+  '',
+].join('\r\n')
+
+const MERGE_DESCRIPTION = [
+  '[Cross Branch Merge]',
+  'Source: //C7/Development/Mainline',
+  'Source Change: 2137156',
+  '',
+  'Original Description:',
+  'fix bug',
+].join('\n')
+
+describe('replaceChangeFormDescription（创建 Pending CL 的表单替换）', () => {
+  it('回归：Description 是最后一个字段时也能替换成功（旧正则的前瞻永不成立 → 静默失效）', () => {
+    const out = replaceChangeFormDescription(P4_CHANGE_FORM, MERGE_DESCRIPTION)
+    expect(out).not.toBe(P4_CHANGE_FORM)
+    expect(out).not.toContain('<enter description here>')
+    expect(out).toContain('Description:\r\n\t[Cross Branch Merge]')
+  })
+
+  it('描述每行都补 tab 缩进（含空行），否则会被 p4 当成新字段名', () => {
+    const out = replaceChangeFormDescription(P4_CHANGE_FORM, MERGE_DESCRIPTION)
+    const lines = out.split('\r\n')
+    const di = lines.indexOf('Description:')
+    expect(lines.slice(di + 1, di + 7)).toEqual([
+      '\t[Cross Branch Merge]',
+      '\tSource: //C7/Development/Mainline',
+      '\tSource Change: 2137156',
+      '\t',
+      '\tOriginal Description:',
+      '\tfix bug',
+    ])
+  })
+
+  it('其它字段原样保留，末尾补空行，行尾沿用模板的 CRLF', () => {
+    const out = replaceChangeFormDescription(P4_CHANGE_FORM, MERGE_DESCRIPTION)
+    expect(out).toContain('Change:\tnew\r\n')
+    expect(out).toContain('Client:\tchenzhixu_C7_Weekly\r\n')
+    expect(out).toContain('User:\tchenzhixu\r\n')
+    expect(out.endsWith('\r\n\r\n')).toBe(true)
+    expect(out.replace(/\r\n/g, '')).not.toContain('\n')
+  })
+
+  it('LF 模板保持 LF', () => {
+    const lf = ['Change:\tnew', 'Description:', '\t<enter description here>', ''].join('\n')
+    expect(replaceChangeFormDescription(lf, 'a\nb')).toBe(
+      ['Change:\tnew', 'Description:', '\ta', '\tb', '', ''].join('\n'),
+    )
+  })
+
+  it('模板里没有 Description 字段时原样返回（调用方据此判错，不直接回灌）', () => {
+    const noDesc = ['Change:\tnew', 'Client:\tx'].join('\r\n')
+    expect(replaceChangeFormDescription(noDesc, 'abc')).toBe(noDesc)
+  })
+})
+
+describe('summarizeP4Error', () => {
+  it('取首行 + 末行（p4 把具体原因放在最后，首行是笼统错误）', () => {
+    const raw = [
+      'Error in change specification.',
+      'Error detected at line 31.',
+      'Change description missing.  You must enter one.',
+    ].join('\r\n')
+    expect(summarizeP4Error(raw)).toBe(
+      'Error in change specification. / Change description missing.  You must enter one.',
+    )
+  })
+
+  it('单行 / 空输入', () => {
+    expect(summarizeP4Error('Change 2137157 created.')).toBe('Change 2137157 created.')
+    expect(summarizeP4Error('   \r\n  ')).toBe('')
   })
 })
 
