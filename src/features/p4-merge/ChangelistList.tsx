@@ -309,13 +309,16 @@ function renderRedmineCell(
   )
 }
 
-/** Description：单行显示，不换行，超长用省略号 + title 全文提示（不渲染链接） */
+/** Description：单行显示，不换行，超长用省略号 + title 全文提示（不渲染链接）.
+ *  describe 返回的完整描述可能含 \n（多行），这里合并为单行避免行高跳动. */
 function renderDescriptionCell(description: string): ReactNode {
-  const desc = description || '(无描述)'
+  const raw = description || '(无描述)'
+  // 把 \n / \r 换成空格，连续空格合并，保证单行（whitespace-nowrap 对 \n 无效）
+  const desc = raw.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
   return (
     <span
       className="text-foreground-secondary whitespace-nowrap truncate text-[12px] leading-4"
-      title={desc}
+      title={raw}
     >
       {desc}
     </span>
