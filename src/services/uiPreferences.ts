@@ -124,6 +124,7 @@ export const PANEL_COLLAPSED_KEYS = {
   quickDirs: 'panel.quickDirs.collapsed',
   p4Workspaces: 'panel.p4Workspaces.collapsed',
   redmineIssues: 'panel.redmineIssues.collapsed',
+  p4Merge: 'panel.p4Merge.collapsed',
 } as const
 
 export type PanelCollapsedKey = (typeof PANEL_COLLAPSED_KEYS)[keyof typeof PANEL_COLLAPSED_KEYS]

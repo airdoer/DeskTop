@@ -13,6 +13,30 @@ import {
   selectLocalWorkspaces,
   type P4Workspace,
 } from './p4'
+import {
+  buildIntegrateArgs,
+  buildPendingChangeDescription,
+  buildResolveArgs,
+  buildResolveOverrideArgs,
+  buildSyncArgs,
+  computeMergePreview,
+  createInitialPipeline,
+  generateTransactionId,
+  BINARY_EXTENSIONS,
+  getExtension,
+  MergeToolRegistry,
+  parseDescribeOutput,
+  parseOpenedOutput,
+  parseTaggedChanges,
+  type BranchMapping,
+  type MergePreview,
+  type MergeTool,
+  type P4Changelist,
+  type P4ChangeFile,
+  type P4OpenedFile,
+  type PipelineStepId,
+  type PipelineStepState,
+} from './p4Merge'
 import { sanitizeLabelsMap, type WorkspaceLabels } from './p4Labels'
 import {
   CODE_PAGE_REG_KEY,
@@ -986,4 +1010,574 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     if (!w || w.isDestroyed()) return { maximized: false }
     return { maximized: w.isMaximized() }
   })
+
+  /* ---------- Cross Branch Merge ---------- */
+  /*
+   * 依据 docs/CROSS_BRANCH_MERGE_TOOL_SPEC.md：
+   *   - §4.1 Renderer 禁止直接执行系统命令，所有 P4 调用经 IPC
+   *   - §5 P4Service 统一封装 exit code / stdout / stderr / charset / timeout / cancellation
+   *   - §43 长时间运行命令支持取消（AbortController → Process.kill）
+   *   - §64 Preview 只读，不修改 Workspace
+   *   - §69.3 永远用 spawn(executable, args)，不拼 shell 字符串
+   */
+
+  const P4_MERGE_CHANGES_TIMEOUT_MS = 20000
+  const P4_MERGE_DESCRIBE_TIMEOUT_MS = 20000
+  const P4_MERGE_OPENED_TIMEOUT_MS = 15000
+  const P4_MERGE_SYNC_TIMEOUT_MS = 120000
+  const P4_MERGE_INTEGRATE_TIMEOUT_MS = 120000
+  const P4_MERGE_RESOLVE_TIMEOUT_MS = 120000
+  const P4_MERGE_CHANGE_TIMEOUT_MS = 15000
+
+  /** 进行中的 Merge 事务：transactionId → AbortController，cancel 时 kill 子进程 */
+  const activeMergeTransactions = new Map<string, AbortController>()
+
+  /**
+   * 可取消的 spawn 包装：返回 stdout/stderr/exitCode，signal abort 时 kill 子进程.
+   * Node 20+ spawn 支持 signal 选项，abort 后子进程收到 SIGTERM.
+   */
+  function runP4Cancellable(
+    p4: string,
+    args: string[],
+    options: { timeout: number; signal?: AbortSignal; stdin?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number | null; aborted: boolean }> {
+    return new Promise((resolve) => {
+      const child = spawn(p4, args, {
+        encoding: 'utf8',
+        windowsHide: true,
+        signal: options.signal,
+        timeout: options.timeout,
+        maxBuffer: 16 * 1024 * 1024,
+      })
+      let stdout = ''
+      let stderr = ''
+      let aborted = false
+
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString('utf8') })
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString('utf8') })
+
+      if (options.stdin) {
+        try {
+          child.stdin?.write(options.stdin, 'utf8')
+          child.stdin?.end()
+        } catch {
+          /* 写入失败由后续 exit code 捕获，不阻断 */
+        }
+      }
+
+      const onAbort = () => {
+        aborted = true
+        try {
+          if (!child.killed) {
+            // Windows 下 SIGTERM 等价于强制结束；tree kill 避免残留子进程
+            if (process.platform === 'win32') {
+              try {
+                process.kill(child.pid ?? 0)
+              } catch {
+                /* pid 失效则忽略 */
+              }
+            } else {
+              child.kill('SIGTERM')
+            }
+          }
+        } catch {
+          /* kill 失败忽略，等待 close 事件 */
+        }
+      }
+      if (options.signal) {
+        if (options.signal.aborted) onAbort()
+        else options.signal.addEventListener('abort', onAbort, { once: true })
+      }
+
+      child.on('error', () => {
+        resolve({ stdout, stderr, exitCode: -1, aborted: true })
+      })
+      child.on('close', (code) => {
+        resolve({ stdout, stderr, exitCode: code, aborted })
+      })
+    })
+  }
+
+  /**
+   * 查已提交 changelist（spec §8）.
+   * 命令：`p4 -ztag changes -c <client> -s submitted -m <limit> [-u <user>]`
+   *
+   * 关键点（踩过的坑）：
+   *   1. 必须加 `-ztag`：默认输出是 `Change 2137156 on ... by user@client 'desc'` 单行文本，
+   *      parseTaggedChanges 只认 `... change` 开头的 ztag 格式.
+   *   2. `-c <client>` 必须放在 `changes` 之后作为子选项：全局 `-c` 只设置 P4CLIENT，
+   *      对 `changes` 命令无过滤作用；作为子选项才按 client 过滤（p4 changes 文档）.
+   *   3. ztag 字段名是 `desc`（单行）与 `time`（unix 秒），不是 `description` / `date`；
+   *      完整多行描述需 `p4 describe`（见 p4-merge:describe handler）.
+   */
+  ipcMain.handle(
+    'p4-merge:changes',
+    async (_, payload: { client: string; user?: string; limit?: number }): Promise<{
+      ok: boolean
+      changes?: P4Changelist[]
+      error?: string
+    }> => {
+      const p4 = resolveP4Executable()
+      if (!p4) return { ok: false, error: '未检测到 p4 命令行工具' }
+      const client = payload?.client?.trim()
+      if (!client) return { ok: false, error: '缺少 source workspace client' }
+      const limit = Math.max(1, Math.min(payload?.limit ?? 50, 500))
+      try {
+        // -L：显示完整描述（默认只给首行，会截断导致 Redmine 单号丢失）
+        const args = ['-ztag', 'changes', '-c', client, '-s', 'submitted', '-L', '-m', String(limit)]
+        if (payload?.user) args.push('-u', payload.user)
+        const out = await runCommand(p4, args, P4_MERGE_CHANGES_TIMEOUT_MS)
+        return { ok: true, changes: parseTaggedChanges(out) }
+      } catch (e) {
+        return { ok: false, error: shortenP4Error(e) }
+      }
+    },
+  )
+
+  /** p4 describe -s <change>：拿文件列表 / Action / Revision / Description（spec §9） */
+  ipcMain.handle(
+    'p4-merge:describe',
+    async (_, payload: { change: number; client?: string }): Promise<{
+      ok: boolean
+      change?: number
+      description?: string
+      files?: P4ChangeFile[]
+      error?: string
+    }> => {
+      const p4 = resolveP4Executable()
+      if (!p4) return { ok: false, error: '未检测到 p4 命令行工具' }
+      const change = Number(payload?.change)
+      if (!Number.isFinite(change) || change <= 0) return { ok: false, error: '无效的 changelist 编号' }
+      try {
+        const args = payload?.client ? ['-c', payload.client] : []
+        args.push('describe', '-s', String(change))
+        const out = await runCommand(p4, args, P4_MERGE_DESCRIBE_TIMEOUT_MS)
+        const parsed = parseDescribeOutput(out)
+        return { ok: true, ...parsed }
+      } catch (e) {
+        return { ok: false, error: shortenP4Error(e) }
+      }
+    },
+  )
+
+  /** p4 -c <client> opened -a <files...>：检查目标 workspace 是否有未提交修改（spec §15） */
+  ipcMain.handle(
+    'p4-merge:opened',
+    async (_, payload: { client: string; files?: string[] }): Promise<{
+      ok: boolean
+      opened?: P4OpenedFile[]
+      error?: string
+    }> => {
+      const p4 = resolveP4Executable()
+      if (!p4) return { ok: false, error: '未检测到 p4 命令行工具' }
+      const client = payload?.client?.trim()
+      if (!client) return { ok: false, error: '缺少 target workspace client' }
+      try {
+        const args = ['-c', client, 'opened', '-a']
+        if (payload?.files && payload.files.length > 0) args.push(...payload.files)
+        const out = await runCommand(p4, args, P4_MERGE_OPENED_TIMEOUT_MS)
+        return { ok: true, opened: parseOpenedOutput(out) }
+      } catch (e) {
+        // p4 opened 在没有打开文件时返回非 0 退出码 + "no open files" 文案，视作空列表
+        const msg = e instanceof Error ? e.message : String(e)
+        if (/no file\(s\) opened|no opened/i.test(msg)) return { ok: true, opened: [] }
+        return { ok: false, error: shortenP4Error(e) }
+      }
+    },
+  )
+
+  /** Merge Tool Registry 实例（默认工具 + 后续可扩展配置文件） */
+  const mergeToolRegistry = new MergeToolRegistry([
+    {
+      id: 'p4merge',
+      name: 'P4Merge',
+      executable: '',
+      extensions: ['.lua', '.json', '.ini', '.cfg', '.xml', '.txt', '.md', '.csv', '.ts', '.js', '.cs'],
+      arguments: '%b %1 %2 %r',
+      priority: 10,
+      successExitCodes: [0],
+      cancelExitCodes: [1],
+    },
+    {
+      id: 'key-excel-merge',
+      name: 'KeyExcelMerge',
+      executable: 'Design/Tool/KeyExcelMergeTool/KeyExcelMerge/KeyExcelMerge.exe',
+      extensions: ['.xlsx', '.xlsm', '.xls'],
+      arguments: '%b %1 %2 %r VCSTool=p4',
+      priority: 5,
+      successExitCodes: [0],
+      cancelExitCodes: [1],
+    },
+  ])
+
+  ipcMain.handle('p4-merge:merge-tools', async (): Promise<{ tools: MergeTool[] }> => ({
+    tools: mergeToolRegistry.list(),
+  }))
+
+  /** 计算 Preview（spec §64 纯只读，不修改 Workspace）：本地推导文件映射 + 工具命中 */
+  ipcMain.handle(
+    'p4-merge:preview',
+    async (_, payload: {
+      sourceWorkspace: string
+      targetWorkspace: string
+      sourceChange: number
+      mapping: BranchMapping
+      changeFiles: P4ChangeFile[]
+    }): Promise<{ ok: boolean; preview?: MergePreview; error?: string }> => {
+      try {
+        const preview = computeMergePreview({
+          sourceWorkspace: payload.sourceWorkspace,
+          targetWorkspace: payload.targetWorkspace,
+          sourceChange: payload.sourceChange,
+          mapping: payload.mapping,
+          changeFiles: payload.changeFiles,
+          registry: mergeToolRegistry,
+        })
+        return { ok: true, preview }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
+  )
+
+  /** 推送进度事件到渲染层：webContents.send('p4-merge:progress', payload) */
+  const emitProgress = (transactionId: string, step: PipelineStepId, patch: Partial<PipelineStepState>) => {
+    const win = getMainWindow()
+    if (!win || win.isDestroyed()) return
+    win.webContents.send('p4-merge:progress', { transactionId, step, patch })
+  }
+
+  /** 创建 Pending Changelist：`p4 -c <client> change -o` 取模板 → 改 description → `p4 change -i` */
+  async function createPendingChange(
+    p4: string,
+    client: string,
+    description: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; change?: number; error?: string }> {
+    try {
+      const outForm = await runP4Cancellable(p4, ['-c', client, 'change', '-o'], {
+        timeout: P4_MERGE_CHANGE_TIMEOUT_MS,
+        signal,
+      })
+      if (outForm.aborted || outForm.exitCode !== 0) {
+        return { ok: false, error: shortenP4Error(outForm.stderr || outForm.stdout || 'p4 change -o 失败') }
+      }
+      // 在 -o 输出中替换 Description 字段；保留其余字段（Files 等由 -i 时自动忽略）
+      const form = outForm.stdout
+      const replaced = form.replace(/^Description:\s*[\s\S]*?(?=\n[A-Za-z]+:)/m, `Description:\n\t${description.replace(/\n/g, '\n\t')}\n`)
+      const submit = await runP4Cancellable(p4, ['-c', client, 'change', '-i'], {
+        timeout: P4_MERGE_CHANGE_TIMEOUT_MS,
+        signal,
+        stdin: replaced,
+      })
+      if (submit.aborted || submit.exitCode !== 0) {
+        return { ok: false, error: shortenP4Error(submit.stderr || submit.stdout || 'p4 change -i 失败') }
+      }
+      // 输出："Change <num> created."
+      const m = submit.stdout.match(/Change\s+(\d+)\s+created/i)
+      return m ? { ok: true, change: Number(m[1]) } : { ok: true }
+    } catch (e) {
+      return { ok: false, error: shortenP4Error(e) }
+    }
+  }
+
+  /**
+   * 执行 Merge 流程（spec §16/§26/§71）：
+   *   preflight → sync → pending → integrate → resolve → result
+   * 全程通过 'p4-merge:progress' 事件推送每步状态，渲染层据此更新管线.
+   * 不自动 submit（spec §29）；不自动 revert/clean（spec §44）.
+   */
+  ipcMain.handle(
+    'p4-merge:execute',
+    async (
+      _,
+      payload: {
+        sourceClient: string
+        targetClient: string
+        sourceChange: number
+        sourceDescription: string
+        mapping: BranchMapping
+        user: string
+        files: { sourcePath: string; targetPath: string; sourceRevision?: number }[]
+        syncMode: 'file' | 'directory'
+      },
+    ): Promise<{
+      ok: boolean
+      transactionId?: string
+      targetChange?: number
+      error?: string
+    }> => {
+      const p4 = resolveP4Executable()
+      if (!p4) return { ok: false, error: '未检测到 p4 命令行工具' }
+      const sourceClient = payload?.sourceClient?.trim()
+      const targetClient = payload?.targetClient?.trim()
+      if (!sourceClient || !targetClient) return { ok: false, error: '缺少 source/target workspace' }
+      if (sourceClient === targetClient) {
+        return { ok: false, error: '源 Workspace 与目标 Workspace 相同，无法执行跨分支 Merge' }
+      }
+      if (!payload.files || payload.files.length === 0) {
+        return { ok: false, error: '没有需要 merge 的文件' }
+      }
+
+      const transactionId = generateTransactionId()
+      const controller = new AbortController()
+      activeMergeTransactions.set(transactionId, controller)
+
+      const pipeline = createInitialPipeline()
+      const setStep = (id: PipelineStepId, patch: Partial<PipelineStepState>) => {
+        const idx = pipeline.findIndex((s) => s.id === id)
+        if (idx >= 0) {
+          pipeline[idx] = { ...pipeline[idx], ...patch, logs: patch.logs ?? pipeline[idx].logs }
+          emitProgress(transactionId, id, pipeline[idx])
+        }
+      }
+      const pushLog = (id: PipelineStepId, line: string) => {
+        const idx = pipeline.findIndex((s) => s.id === id)
+        if (idx >= 0) {
+          pipeline[idx] = { ...pipeline[idx], logs: [...pipeline[idx].logs, line] }
+          emitProgress(transactionId, id, pipeline[idx])
+        }
+      }
+
+      try {
+        /* Step 1: Preflight —— 检查目标 workspace 已打开文件 */
+        setStep('preflight', { status: 'running', startedAt: Date.now() })
+        pushLog('preflight', `Target: ${targetClient}`)
+        const openedRes = await runP4Cancellable(
+          p4,
+          ['-c', targetClient, 'opened', '-a'],
+          { timeout: P4_MERGE_OPENED_TIMEOUT_MS, signal: controller.signal },
+        )
+        if (openedRes.aborted) {
+          setStep('preflight', { status: 'failed', error: '已取消', endedAt: Date.now() })
+          return { ok: false, transactionId, error: '已取消' }
+        }
+        const opened = parseOpenedOutput(openedRes.stdout)
+        if (opened.length > 0) {
+          pushLog('preflight', `检测到 ${opened.length} 个已打开文件（未提交）`)
+          setStep('preflight', { status: 'failed', error: '目标 Workspace 存在未提交修改', endedAt: Date.now() })
+          return { ok: false, transactionId, error: '目标 Workspace 存在未提交修改，请先处理后再执行 Merge' }
+        }
+        pushLog('preflight', '目标 Workspace 干净')
+        setStep('preflight', { status: 'success', endedAt: Date.now() })
+
+        /* Step 2: Sync —— 最小范围 Sync（spec §13/§14），file 或 directory 模式，不再支持 manual */
+        setStep('sync', { status: 'running', startedAt: Date.now() })
+        {
+          const mode = payload.syncMode === 'directory' ? 'directory' : 'file'
+          const targetFiles = payload.files.map((f) => f.targetPath)
+          pushLog('sync', `p4 -c ${targetClient} sync (${mode}, ${targetFiles.length} files)`)
+          const syncRes = await runP4Cancellable(
+            p4,
+            buildSyncArgs({ targetClient, files: targetFiles, mode }),
+            {
+              timeout: P4_MERGE_SYNC_TIMEOUT_MS,
+              signal: controller.signal,
+            },
+          )
+          if (syncRes.aborted) {
+            setStep('sync', { status: 'failed', error: '已取消', endedAt: Date.now() })
+            return { ok: false, transactionId, error: '已取消' }
+          }
+          if (syncRes.exitCode !== 0 && !/up-to-date/i.test(syncRes.stderr)) {
+            setStep('sync', { status: 'failed', error: shortenP4Error(syncRes.stderr || syncRes.stdout), endedAt: Date.now() })
+            return { ok: false, transactionId, error: `Sync 失败：${shortenP4Error(syncRes.stderr || syncRes.stdout)}` }
+          }
+          pushLog('sync', `Sync 完成（${mode}）`)
+          setStep('sync', { status: 'success', endedAt: Date.now() })
+        }
+
+        /* Step 3: Pending CL —— 创建目标 Pending Changelist（spec §18） */
+        setStep('pending', { status: 'running', startedAt: Date.now() })
+        const desc = buildPendingChangeDescription({
+          sourceBranch: payload.mapping.source,
+          sourceChange: payload.sourceChange,
+          targetBranch: payload.mapping.target,
+          user: payload.user || 'unknown',
+          sourceDescription: payload.sourceDescription || '',
+        })
+        pushLog('pending', `创建 Pending CL：[Cross Branch Merge] ${payload.sourceChange}`)
+        const pendingRes = await createPendingChange(p4, targetClient, desc, controller.signal)
+        if (!pendingRes.ok || !pendingRes.change) {
+          setStep('pending', { status: 'failed', error: pendingRes.error ?? '创建 Pending CL 失败', endedAt: Date.now() })
+          return { ok: false, transactionId, error: pendingRes.error ?? '创建 Pending CL 失败' }
+        }
+        const targetChange = pendingRes.change
+        pushLog('pending', `Pending CL #${targetChange} 已创建`)
+        setStep('pending', { status: 'success', endedAt: Date.now() })
+
+        /* Step 4: Integrate —— p4 integrate -c <targetChange> <source>#<rev> <target> */
+        setStep('integrate', { status: 'running', startedAt: Date.now() })
+        const integrateArgs = buildIntegrateArgs({
+          targetClient,
+          targetChange: String(targetChange),
+          files: payload.files,
+        })
+        pushLog('integrate', `p4 -c ${targetClient} integrate -c ${targetChange} (${payload.files.length} files)`)
+        const integRes = await runP4Cancellable(p4, integrateArgs, {
+          timeout: P4_MERGE_INTEGRATE_TIMEOUT_MS,
+          signal: controller.signal,
+        })
+        if (integRes.aborted) {
+          setStep('integrate', { status: 'failed', error: '已取消', endedAt: Date.now() })
+          return { ok: false, transactionId, error: '已取消', targetChange }
+        }
+        if (integRes.exitCode !== 0) {
+          setStep('integrate', { status: 'failed', error: shortenP4Error(integRes.stderr || integRes.stdout), endedAt: Date.now() })
+          return { ok: false, transactionId, error: `Integrate 失败：${shortenP4Error(integRes.stderr || integRes.stdout)}`, targetChange }
+        }
+        pushLog('integrate', 'Integrate 完成')
+        setStep('integrate', { status: 'success', endedAt: Date.now() })
+
+        /* Step 5: Resolve —— 文本走 p4 resolve -am，二进制走 p4 resolve -as 覆盖（spec §26 + §22 Binary 覆盖策略） */
+        setStep('resolve', { status: 'running', startedAt: Date.now() })
+        const allTargetFiles = payload.files.map((f) => f.targetPath)
+        // 按扩展名拆分：二进制走 accept source 覆盖，其余走 auto merge
+        const binaryFiles = payload.files
+          .filter((f) => BINARY_EXTENSIONS.has(getExtension(f.targetPath)))
+          .map((f) => f.targetPath)
+        const textFiles = payload.files
+          .filter((f) => !BINARY_EXTENSIONS.has(getExtension(f.targetPath)))
+          .map((f) => f.targetPath)
+
+        // 5a: 文本自动合并
+        if (textFiles.length > 0) {
+          pushLog('resolve', `p4 -c ${targetClient} resolve -am (${textFiles.length} text files)`)
+          const resolveRes = await runP4Cancellable(p4, buildResolveArgs({ targetClient, files: textFiles, mode: 'auto' }), {
+            timeout: P4_MERGE_RESOLVE_TIMEOUT_MS,
+            signal: controller.signal,
+          })
+          if (resolveRes.aborted) {
+            setStep('resolve', { status: 'failed', error: '已取消', endedAt: Date.now() })
+            return { ok: false, transactionId, error: '已取消', targetChange }
+          }
+          // resolve -am 在存在冲突时会返回非 0，但不视为整体失败：后续由用户在 P4V 中手动 resolve
+          if (resolveRes.exitCode !== 0) {
+            const hasConflict = /conflict|merge/i.test(resolveRes.stderr + resolveRes.stdout)
+            pushLog('resolve', `resolve -am 退出码 ${resolveRes.exitCode}，存在需手动处理的冲突`)
+            setStep('resolve', {
+              status: hasConflict ? 'success' : 'failed',
+              error: hasConflict ? undefined : shortenP4Error(resolveRes.stderr || resolveRes.stdout),
+              endedAt: Date.now(),
+            })
+            if (!hasConflict) {
+              return { ok: false, transactionId, error: `Resolve 失败：${shortenP4Error(resolveRes.stderr || resolveRes.stdout)}`, targetChange }
+            }
+          } else {
+            pushLog('resolve', `Resolve -am 完成（${textFiles.length} 个文本文件）`)
+            setStep('resolve', { status: 'success', endedAt: Date.now() })
+          }
+        } else {
+          pushLog('resolve', '无文本文件需要 auto merge')
+        }
+
+        // 5b: 二进制覆盖（accept source，用源版本覆盖目标）
+        if (binaryFiles.length > 0) {
+          pushLog('resolve', `p4 -c ${targetClient} resolve -as (${binaryFiles.length} binary files, accept source)`)
+          const overrideRes = await runP4Cancellable(p4, buildResolveOverrideArgs({ targetClient, files: binaryFiles }), {
+            timeout: P4_MERGE_RESOLVE_TIMEOUT_MS,
+            signal: controller.signal,
+          })
+          if (overrideRes.aborted) {
+            setStep('resolve', { status: 'failed', error: '已取消', endedAt: Date.now() })
+            return { ok: false, transactionId, error: '已取消', targetChange }
+          }
+          if (overrideRes.exitCode !== 0) {
+            // 二进制覆盖失败不终止整体流程，但记录警告，由用户在 P4V 手动处理
+            pushLog('resolve', `⚠ 二进制覆盖退出码 ${overrideRes.exitCode}：${shortenP4Error(overrideRes.stderr || overrideRes.stdout)}`)
+          } else {
+            pushLog('resolve', `二进制覆盖完成（${binaryFiles.length} 个文件 accept source）`)
+          }
+          setStep('resolve', { status: 'success', endedAt: Date.now() })
+        }
+
+        /* Step 6: Result —— 校验目标 Pending CL 文件 */
+        setStep('result', { status: 'running', startedAt: Date.now() })
+        const verifyRes = await runP4Cancellable(p4, ['-c', targetClient, 'opened', '-c', String(targetChange), '-a'], {
+          timeout: P4_MERGE_OPENED_TIMEOUT_MS,
+          signal: controller.signal,
+        })
+        const verifyFiles = parseOpenedOutput(verifyRes.stdout)
+        pushLog('result', `目标 Pending CL #${targetChange}：${verifyFiles.length} 个文件已就绪`)
+        pushLog('result', '不自动 Submit，请通过 P4V / p4 自行 Review 后提交')
+        setStep('result', { status: 'success', endedAt: Date.now() })
+
+        return { ok: true, transactionId, targetChange }
+      } catch (e) {
+        return { ok: false, transactionId, error: e instanceof Error ? e.message : String(e) }
+      } finally {
+        activeMergeTransactions.delete(transactionId)
+      }
+    },
+  )
+
+  /** 取消进行中的 Merge 事务：kill 子进程并标记为 cancelled（spec §43） */
+  ipcMain.handle(
+    'p4-merge:cancel',
+    async (_, transactionId: string): Promise<{ ok: boolean }> => {
+      const controller = activeMergeTransactions.get(transactionId)
+      if (!controller) return { ok: false }
+      controller.abort()
+      activeMergeTransactions.delete(transactionId)
+      return { ok: true }
+    },
+  )
+
+  /**
+   * 在 P4V 中打开指定 workspace，并可选定位到 Pending Changelist / 已提交 Changelist / 某个文件.
+   * 复用既有 p4vc / p4v.exe 启动逻辑（buildP4VArgs），根据 payload 选择定位目标：
+   *   - 有 target：p4vc -c <client> workspacewindow -s <target>（定位到文件/目录）
+   *   - 有 pendingChange：p4vc -c <client> changelist <num>（打开 Pending CL 视图）
+   *   - 有 change（已提交）：p4vc -c <client> change <num>（打开 submitted changelist 详情）
+   *   - 都没有：p4vc -c <client> workspacewindow（只打开工作区窗口）
+   * 这是辅助能力（spec §58），Merge 核心流程不依赖它.
+   */
+  ipcMain.handle(
+    'p4-merge:open-in-p4v',
+    async (
+      _,
+      payload: {
+        client: string
+        port?: string
+        user?: string
+        charset?: string
+        pendingChange?: number
+        /** 已提交 changelist 编号（用 p4vc change <num> 打开详情） */
+        change?: number
+        /** 要定位的文件/目录（depot 路径或本地路径，对应 p4vc -s） */
+        target?: string
+      },
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const client = payload?.client?.trim()
+      if (!client) return { ok: false, error: '缺少 client 名' }
+      const p4vc = resolveP4VCLauncher()
+      const command = p4vc ?? resolveP4VExecutable()
+      if (!command) return { ok: false, error: '未检测到 p4v / p4vc（P4 图形客户端）' }
+      try {
+        const args: string[] = []
+        if (!p4vc) args.push('-p4vc')
+        if (payload.port) args.push('-p', payload.port)
+        if (payload.user) args.push('-u', payload.user)
+        args.push('-c', client)
+        if (payload.charset) args.push('-C', payload.charset)
+        const target = payload.target?.trim()
+        if (target) {
+          // 定位到文件/目录：workspacewindow -s <target>
+          args.push('workspacewindow', '-s', target)
+        } else if (payload.pendingChange && Number.isFinite(payload.pendingChange)) {
+          // 打开 Pending CL 视图
+          args.push('changelist', String(payload.pendingChange))
+        } else if (payload.change && Number.isFinite(payload.change)) {
+          // 打开已提交 changelist 详情：p4vc change <num>
+          args.push('change', String(payload.change))
+        } else {
+          args.push('workspacewindow')
+        }
+        spawnDetached(command, args)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: shortenP4Error(e) }
+      }
+    },
+  )
 }

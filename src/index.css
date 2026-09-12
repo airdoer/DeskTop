@@ -138,3 +138,23 @@
     background: #a0a0a0;
   }
 }
+
+/*
+ * Cross Branch Merge：Source → Target 流动箭头的 dash 流动动画.
+ * 用 stroke-dashoffset 持续负向偏移，让虚线从左向右流动，表达 Merge 方向感.
+ * 只在两端 workspace 都已选择且不重复时启用（active），否则静态低对比度提示.
+ */
+@keyframes p4-merge-flow {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -28; }
+}
+
+.p4-merge-flow-dash {
+  animation: p4-merge-flow 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p4-merge-flow-dash {
+    animation: none;
+  }
+}

@@ -8,7 +8,7 @@ import { forwardRef, type InputHTMLAttributes, type ReactNode } from 'react'
  * 规范 §29：业务代码禁止直接散用 <Input/>，必须通过 wrapper 统一风格。
  */
 
-export type AppInputProps = InputHTMLAttributes<HTMLInputElement> & {
+export type AppInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'prefix' | 'suffix'> & {
   prefix?: ReactNode
   suffix?: ReactNode
   invalid?: boolean
