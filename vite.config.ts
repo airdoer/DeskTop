@@ -7,7 +7,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { electronSimple } from 'vite-plugin-electron/multi-env'
 import { notBundle } from 'vite-plugin-electron/plugin'
-import pkg from './package.json'
+import pkg from './package.json' with { type: 'json' }
 
 const external = Object.keys(
   'dependencies' in pkg ? (pkg.dependencies as Record<string, string>) : {},
@@ -43,7 +43,8 @@ export default defineConfig(({ command }) => {
   return {
     resolve: {
       alias: {
-        '@': path.join(__dirname, 'src'),
+        // Vite 8 起配置按 ESM 解析，CJS 的 `__dirname` 已弃用，统一用 `import.meta.dirname`
+        '@': path.join(import.meta.dirname, 'src'),
       },
     },
     plugins: [
