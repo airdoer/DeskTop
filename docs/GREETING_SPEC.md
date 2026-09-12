@@ -26,6 +26,7 @@
 
 ```text
 上午好
+中午好
 下午好
 晚上好
 ```
@@ -88,6 +89,7 @@
 
 ```text
 上午好
+中午好
 下午好
 晚上好
 ```
@@ -198,10 +200,14 @@ MVP 只实现时间相关问候。
 
 | 时间            | Greeting |
 | ------------- | -------- |
-| 05:00 - 11:59 | 上午好      |
-| 12:00 - 17:59 | 下午好      |
+| 05:00 - 11:29 | 上午好      |
+| 11:30 - 13:59 | 中午好      |
+| 14:00 - 17:59 | 下午好      |
 | 18:00 - 23:59 | 晚上好      |
 | 00:00 - 04:59 | 夜深了      |
+
+区间口径为「左闭右开」：起点（含）至下一起点（不含）。即 11:30:00 ≤ t < 14:00:00 为中午，
+14:00 起进入下午；中午起点为 11:30（非整点），实现需支持分钟级边界。
 
 其中：
 
@@ -335,6 +341,7 @@ src/
 ```ts
 export type GreetingType =
   | 'morning'
+  | 'noon'
   | 'afternoon'
   | 'evening'
   | 'lateNight'
@@ -404,6 +411,7 @@ resolveGreeting({
 welcomeBack   100
 hardWork       80
 morning        10
+noon           10
 afternoon      10
 evening        10
 lateNight      10
@@ -449,6 +457,10 @@ Greeting 文案不得硬编码在 React Component 中。
 export const greetingMessages = {
   morning: [
     '上午好',
+  ],
+
+  noon: [
+    '中午好',
   ],
 
   afternoon: [
@@ -670,8 +682,8 @@ Workspace
 例如：
 
 ```text
-11:59 启动
-12:00
+11:29 启动
+11:30
 ```
 
 不能因为组件只在 mount 时执行一次而继续显示：
@@ -700,12 +712,12 @@ Recalculate Greeting
 例如：
 
 ```text
-11:59:50
+11:29:50
     │
     └── 10 秒后重新计算
             │
             ▼
-        下午好
+        中午好
 ```
 
 不要使用：
@@ -928,6 +940,7 @@ i18n.t(`greeting.${type}`)
 {
   "greeting": {
     "morning": "上午好",
+    "noon": "中午好",
     "afternoon": "下午好",
     "evening": "晚上好",
     "lateNight": "夜深了",
@@ -943,6 +956,7 @@ i18n.t(`greeting.${type}`)
 {
   "greeting": {
     "morning": "Good morning",
+    "noon": "Good afternoon",
     "afternoon": "Good afternoon",
     "evening": "Good evening",
     "lateNight": "It's getting late",
@@ -951,6 +965,8 @@ i18n.t(`greeting.${type}`)
   }
 }
 ```
+
+> 英文没有与「中午」对应的独立问候语，`noon` 沿用 `Good afternoon`，不是重复定义的笔误。
 
 ---
 
@@ -962,8 +978,11 @@ i18n.t(`greeting.${type}`)
 04:59 → 夜深了
 05:00 → 上午好
 
-11:59 → 上午好
-12:00 → 下午好
+11:29 → 上午好
+11:30 → 中午好
+
+13:59 → 中午好
+14:00 → 下午好
 
 17:59 → 下午好
 18:00 → 晚上好
@@ -998,14 +1017,17 @@ Given:
 When:
 
 ```text
-当前时间为 12:00 ~ 17:59
+当前时间为 11:30 ~ 13:59（中午区间）
 ```
 
 Then:
 
 ```text
-Header 显示「下午好」
+Header 显示「中午好」
 ```
+
+> 其余区间同理由 §5.1 的时间表决定（05:00–11:29 上午好 / 14:00–17:59 下午好 /
+> 18:00–23:59 晚上好 / 00:00–04:59 夜深了）。
 
 ---
 
@@ -1033,19 +1055,19 @@ Greeting 不影响页面操作
 Given：
 
 ```text
-用户 11:59 打开工具
+用户 11:29 打开工具
 ```
 
 When：
 
 ```text
-系统时间进入 12:00
+系统时间进入 11:30
 ```
 
 Then：
 
 ```text
-Greeting 自动从「上午好」更新为「下午好」
+Greeting 自动从「上午好」更新为「中午好」
 ```
 
 ---
@@ -1198,8 +1220,9 @@ Context
 规则：
 
 ```text
-05:00–11:59   上午好
-12:00–17:59   下午好
+05:00–11:29   上午好
+11:30–13:59   中午好
+14:00–17:59   下午好
 18:00–23:59   晚上好
 00:00–04:59   夜深了
 ```
@@ -1237,54 +1260,75 @@ AI
 
 # 28. 开发任务拆分
 
+> 实现状态（v1，时间问候 MVP）：Task 1–5 已完成并落地到
+> `src/features/greeting/`（`greeting.types.ts` / `greeting.config.ts` / `GreetingResolver.ts` / `Greeting.tsx`）
+> 与 `src/shell/TitleBar.tsx`，边界用例见 `test/greeting.test.ts`。
+> 与本文档的三处偏差见下方 Task 2 / Task 3 的括注。
+>
+> 区间调整记录：v1.1 起中午独立为 11:30–13:59（原 12:00 起为下午）。
+> 时间边界改为分钟级，实现见 `TIME_GREETING_RANGES` 的 `startMinute` 与
+> `TIME_BOUNDARY_MINUTES`（新增/调整区间只需改 `TIME_GREETING_RANGES`）。
+
 ### Task 1 — Greeting Domain
 
-* [ ] 创建 `GreetingType`
-* [ ] 创建 `GreetingContext`
-* [ ] 创建 `GreetingResult`
-* [ ] 实现 `resolveGreeting()`
-* [ ] 实现时间区间判断
-* [ ] 添加边界测试
+* [x] 创建 `GreetingType`
+* [x] 创建 `GreetingContext`
+* [x] 创建 `GreetingResult`
+* [x] 实现 `resolveGreeting()`
+* [x] 实现时间区间判断
+* [x] 添加边界测试
 
 ### Task 2 — i18n
 
-* [ ] 增加中文 Greeting
-* [ ] 增加英文 Greeting
-* [ ] Greeting 不允许在 Component 内硬编码
+* [x] 增加中文 Greeting
+* [x] 增加英文 Greeting
+* [x] Greeting 不允许在 Component 内硬编码
+
+> 偏差：项目当前未引入 i18n 库（`package.json` 无 i18next / react-i18next），且
+> `UI_DESIGN_SYSTEM.md` §30 禁止自行引入新依赖。因此文案收敛在 `greeting.config.ts` 的
+> `greetingMessages`（按 locale 分组，形状等价于 `greeting.<type>`），
+> 接入 i18n 后只需替换 `resolveGreetingText` 内部实现。
 
 ### Task 3 — Header UI
 
-* [ ] 创建 `Greeting` Component
-* [ ] 集成 User Persona
-* [ ] 控制 typography
-* [ ] 控制 spacing
-* [ ] 支持窗口缩小时隐藏
+* [x] 创建 `Greeting` Component
+* [x] 集成 User Persona
+* [x] 控制 typography
+* [x] 控制 spacing
+* [x] 支持窗口缩小时隐藏
+
+> 偏差一：本项目的「Header」对应 `src/shell/TitleBar.tsx`（36px 自定义标题栏），
+> 问候语置于 User Persona 左侧、随拖拽区一起呈现。
+> 偏差二：响应式阈值用 1024px 而非默认 `md`(768px) —— 窗口 `minWidth: 960`，
+> 768px 断点永不生效。
 
 ### Task 4 — Runtime
 
-* [ ] 应用启动计算 Greeting
-* [ ] 计算下一时间边界
-* [ ] 使用 `setTimeout` 更新
-* [ ] 页面切换不重新触发
-* [ ] 窗口 resize 不重新触发
+* [x] 应用启动计算 Greeting
+* [x] 计算下一时间边界
+* [x] 使用 `setTimeout` 更新
+* [x] 页面切换不重新触发
+* [x] 窗口 resize 不重新触发
 
 ### Task 5 — Accessibility
 
-* [ ] Greeting 不进入 Tab
-* [ ] 不使用 assertive aria-live
-* [ ] 不抢占 focus
-* [ ] 窄窗口下 Persona 保持可用
+* [x] Greeting 不进入 Tab
+* [x] 不使用 assertive aria-live
+* [x] 不抢占 focus
+* [x] 窄窗口下 Persona 保持可用
 
 ### Task 6 — Acceptance Test
 
-* [ ] 04:59
-* [ ] 05:00
-* [ ] 11:59
-* [ ] 12:00
-* [ ] 17:59
-* [ ] 18:00
-* [ ] 23:59
-* [ ] 00:00
-* [ ] 页面切换
-* [ ] Window Resize
-* [ ] 应用长时间运行
+* [x] 04:59
+* [x] 05:00
+* [x] 11:29
+* [x] 11:30
+* [x] 13:59
+* [x] 14:00
+* [x] 17:59
+* [x] 18:00
+* [x] 23:59
+* [x] 00:00
+* [ ] 页面切换（需 `pnpm dev` 手动确认）
+* [ ] Window Resize（需 `pnpm dev` 手动确认）
+* [ ] 应用长时间运行（需跨时间边界实机确认）
