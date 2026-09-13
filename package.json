@@ -1,7 +1,7 @@
 {
   "name": "electron-vite-react",
   "productName": "DeskTop",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Electron Vite React boilerplate.",
   "license": "MIT",
