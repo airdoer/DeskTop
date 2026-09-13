@@ -6,6 +6,7 @@ import {
   SidebarCollapseIcon,
   SidebarExpandIcon,
 } from '@/components/ui/icons'
+import { getAppInfo } from '@/services/appUpdate'
 import { readSidebarCollapsed, saveSidebarCollapsed } from '@/services/uiPreferences'
 import {
   DEFAULT_EXPANDED_GROUPS,
@@ -194,14 +195,43 @@ function CollapseToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle:
   )
 }
 
+/** 左下角署名。本工具为单人使用，暂不接 SSO；将来多人共用再改为动态取值 */
+const FOOTER_AUTHOR = 'chenzhixu'
+
+/*
+ * Footer — 左下角版本号。
+ *
+ * 版本号必须**动态读取**，不能写死：写死会在每次发版后与真实版本脱节
+ * （2026-09-14 实测：package.json 已 bump 到 0.0.2，此处仍显示 v0.1.0）。
+ * 数据来源与「设置 → 软件更新」面板相同（app:get-info → app.getVersion()），
+ * 开发态与打包态都取 package.json 的 version —— 前提是 Electron 以项目根目录启动，
+ * 否则 getVersion() 会静默回退成 Electron 自身版本（见 vite.config.ts 的 spawnElectron）。
+ */
 function Footer({ collapsed }: { collapsed: boolean }) {
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    void getAppInfo().then((info) => {
+      if (alive) setVersion(info.version)
+    })
+    // 卸载后不再 setState，避免快速切页时的无效更新
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const versionLabel = version ? `v${version}` : ''
+  // 收起态宽度仅 56px，放不下用户名，只留版本号；版本未取回时两处都留空，不显示占位符
+  const label = collapsed ? versionLabel : [versionLabel, FOOTER_AUTHOR].filter(Boolean).join(' · ')
+
   return (
     <div
       className={`px-2 py-2 border-t border-border-subtle text-xs text-foreground-tertiary leading-4 ${
         collapsed ? 'text-center text-[10px]' : 'px-3'
       }`}
     >
-      {collapsed ? 'v0.1' : 'v0.1.0 · chenzhixu'}
+      {label}
     </div>
   )
 }
