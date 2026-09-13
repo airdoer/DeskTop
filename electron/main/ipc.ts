@@ -25,6 +25,7 @@ import {
   buildOpenedArgs,
   buildSyncArgs,
   buildExcelMergeArgs,
+  classifyOpenedFiles,
   computeMergePreview,
   createInitialPipeline,
   generateTransactionId,
@@ -1399,7 +1400,10 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         user: string
         files: { sourcePath: string; targetPath: string; sourceRevision?: number; action?: string }[]
         syncMode: 'file' | 'directory'
-        /** 用户确认后置 true：先 revert 重叠已打开文件再继续（见 service 层 ExecuteMergeParams） */
+        /**
+         * @deprecated 不再使用：Preflight 现在自动 Revert 重叠文件，无需用户确认.
+         * 保留字段仅为向后兼容旧前端；新逻辑下传入会被忽略.
+         */
         revertOverlapping?: boolean
       },
     ): Promise<{
@@ -1409,7 +1413,18 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       /** Excel 三路合并（KeyExcelMerge.exe）的备份根目录；含 xlsx 文件时返回，供前端「打开备份目录」 */
       backupDir?: string
       error?: string
+      /**
+       * Preflight 收集的非阻断 warning 文案（如「检测到 N 个无关已打开文件，已忽略」、
+       * 「N 个重叠文件已自动 Revert 并归入新 CL」）。前端据此 toast.warning 提示，
+       * 完整 warning 行也写入 preflight 步骤日志（MergePipeline Modal 可查看）.
+       */
+      warnings?: string[]
+      /**
+       * @deprecated 不再使用：Preflight 现在自动 Revert 重叠文件，无需用户确认.
+       * 保留字段仅为向后兼容旧前端；新逻辑下永远为 undefined.
+       */
       needConfirm?: boolean
+      /** @deprecated 同 needConfirm，不再返回。 */
       overlappingOpened?: P4OpenedFile[]
     }> => {
       const p4 = resolveP4Executable()
@@ -1448,14 +1463,20 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       // 声明在 try 外层，catch 也能访问并回传给前端.
       let excelBackupDir: string | undefined
 
+      // Preflight 收集的 warning 文案：成功路径回传给前端做 toast.warning 提示.
+      // 声明在 try 外层，catch / 中间失败 return 也能访问（虽然中间 return 不带，但 catch 带）.
+      let preflightWarnings: string[] = []
+
       try {
-        /* Step 1: Preflight —— 检查目标 workspace 已打开文件，区分「与本次 Merge 重叠」与「无关」两类：
-         *   - 无关已打开文件（不在本次 Merge 的 target 路径集合内）：直接阻断，这是别人的 WIP，不能动；
-         *   - 重叠已打开文件（恰好是本次 Merge 要 integrate 的目标）：
-         *       · 首次调用（revertOverlapping 未传）：返回 needConfirm + 文件列表，让 UI 弹确认；
-         *       · 用户确认后带 revertOverlapping=true 重跑：先 p4 revert 这些文件再继续；
+        /* Step 1: Preflight —— 检查目标 workspace 已打开文件，做「警告不阻断」的健壮处理：
+         *   - 无关已打开文件（不在本次 Merge 的 target 路径集合内）：仅记 warning，不阻断、不触碰.
+         *     integrate 只作用于 target 路径，这些文件不会被改动 —— 保护别人 WIP 的同时不再阻断流程.
+         *   - 重叠已打开文件（恰好是本次 Merge 要 integrate 的目标）：自动 Revert 后继续，
+         *     后续 `p4 integrate -c <targetChange>` 会把它们统一归入新 Pending CL（spec §18）.
+         *     不再要求用户确认 —— 按用户要求「有其他 CL / 未提交时也可继续 merge」，warning 提示即可.
          *   - 完全干净：直接进入 Sync.
-         * 这样既保护无关 WIP 不被误改，又让「目标 CL 里残留上次半 merge 的文件」这种常见情况能一键继续. */
+         * 说明：历史上对「无关 WIP」直接阻断、对「重叠文件」弹确认，实测两者都会让一次正常的 Merge
+         *   因为目标 Workspace 有残留而失败，故统一降级为 warning + 自动 Revert，执行记录中可追溯. */
         setStep('preflight', { status: 'running', startedAt: Date.now() })
         pushLog('preflight', `Target: ${targetClient}`)
         const openedRes = await runP4Cancellable(
@@ -1468,45 +1489,39 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           return { ok: false, transactionId, error: '已取消' }
         }
         const opened = parseOpenedOutput(openedRes.stdout)
-        const targetPathSet = new Set(payload.files.map((f) => f.targetPath))
-        const overlapping = opened.filter((o) => targetPathSet.has(o.depotPath))
-        const otherOpened = opened.filter((o) => !targetPathSet.has(o.depotPath))
+        const { overlapping, otherOpened } = classifyOpenedFiles(
+          opened,
+          payload.files.map((f) => f.targetPath),
+        )
+        const warnings: string[] = []
 
-        // 1a: 无关已打开文件 —— 直接阻断（保护别人的 WIP）
+        // 1a: 无关已打开文件 —— 警告并继续（不阻断、不触碰；integrate 不会触及这些路径）
         if (otherOpened.length > 0) {
           const samples = otherOpened
             .slice(0, 3)
             .map((f) => `${f.depotPath}${f.client ? ` @${f.client}` : ''}`)
             .join('、')
-          pushLog('preflight', `检测到 ${otherOpened.length} 个与本次 Merge 无关的已打开文件：${samples}${otherOpened.length > 3 ? ' …' : ''}`)
-          setStep('preflight', { status: 'failed', error: '目标 Workspace 存在与本次 Merge 无关的未提交修改', endedAt: Date.now() })
-          return {
-            ok: false,
-            transactionId,
-            error: `目标 Workspace 存在 ${otherOpened.length} 个与本次 Merge 无关的未提交文件，请先处理后再执行 Merge`,
-          }
+          pushLog(
+            'preflight',
+            `⚠ 检测到 ${otherOpened.length} 个与本次 Merge 无关的已打开文件，已忽略并继续（不触碰）：${samples}${otherOpened.length > 3 ? ' …' : ''}`,
+          )
+          warnings.push(`目标 Workspace 存在 ${otherOpened.length} 个与本次 Merge 无关的未提交文件，已忽略不处理`)
         }
 
-        // 1b: 重叠已打开文件 —— 需要用户确认
-        if (overlapping.length > 0 && !payload.revertOverlapping) {
+        // 1b: 重叠已打开文件 —— 自动 Revert 后继续，后续 Integrate 会把它们归入新 Pending CL
+        if (overlapping.length > 0) {
+          const revertFiles = overlapping.map((o) => o.depotPath)
           const samples = overlapping
             .slice(0, 5)
             .map((f) => `${f.depotPath}${f.change && f.change !== 'default' ? ` @${f.change}` : ''}`)
             .join('、')
-          pushLog('preflight', `检测到 ${overlapping.length} 个文件已在目标 Pending CL 中打开：${samples}${overlapping.length > 5 ? ' …' : ''}`)
-          setStep('preflight', { status: 'failed', error: '检测到重叠已打开文件，等待用户确认是否 Revert', endedAt: Date.now() })
-          return {
-            ok: false,
-            transactionId,
-            error: `目标 Workspace 的 Pending CL 中已有 ${overlapping.length} 个本次 Merge 涉及的文件，需确认是否 Revert 后继续`,
-            needConfirm: true,
-            overlappingOpened: overlapping,
-          }
-        }
-
-        // 1c: 用户已确认（revertOverlapping=true）—— revert 重叠文件后继续
-        if (overlapping.length > 0 && payload.revertOverlapping) {
-          const revertFiles = overlapping.map((o) => o.depotPath)
+          pushLog(
+            'preflight',
+            `⚠ 检测到 ${overlapping.length} 个文件已在目标 Workspace 打开，自动 Revert 后继续 Merge（将统一归入新 Pending CL）：${samples}${overlapping.length > 5 ? ' …' : ''}`,
+          )
+          warnings.push(
+            `目标 Workspace 有 ${overlapping.length} 个本次 Merge 涉及的文件已被打开，已自动 Revert 并将归入新 Pending CL`,
+          )
           pushLog('preflight', `Revert ${revertFiles.length} 个重叠文件：p4 -c ${targetClient} revert <files>`)
           const revertRes = await runP4Cancellable(
             p4,
@@ -1523,10 +1538,15 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
             setStep('preflight', { status: 'failed', error: msg, endedAt: Date.now() })
             return { ok: false, transactionId, error: `Revert 失败：${msg}` }
           }
-          pushLog('preflight', `Revert 完成（${revertFiles.length} 个文件）`)
+          pushLog('preflight', `Revert 完成（${revertFiles.length} 个文件），后续 Integrate 将把它们归入新 Pending CL`)
         }
 
-        pushLog('preflight', '目标 Workspace 干净')
+        preflightWarnings = warnings
+        if (warnings.length > 0) {
+          pushLog('preflight', `目标 Workspace 已就绪（含 ${warnings.length} 条 warning，不阻断 Merge）`)
+        } else {
+          pushLog('preflight', '目标 Workspace 干净')
+        }
         setStep('preflight', { status: 'success', endedAt: Date.now() })
 
         /* Step 2: Sync —— 最小范围 Sync（spec §13/§14），file 或 directory 模式，不再支持 manual */
@@ -1902,9 +1922,21 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         }
         setStep('result', { status: 'success', endedAt: Date.now() })
 
-        return { ok: true, transactionId, targetChange, backupDir: excelBackupDir }
+        return {
+          ok: true,
+          transactionId,
+          targetChange,
+          backupDir: excelBackupDir,
+          warnings: preflightWarnings.length > 0 ? preflightWarnings : undefined,
+        }
       } catch (e) {
-        return { ok: false, transactionId, error: e instanceof Error ? e.message : String(e), backupDir: excelBackupDir }
+        return {
+          ok: false,
+          transactionId,
+          error: e instanceof Error ? e.message : String(e),
+          backupDir: excelBackupDir,
+          warnings: preflightWarnings.length > 0 ? preflightWarnings : undefined,
+        }
       } finally {
         activeMergeTransactions.delete(transactionId)
       }

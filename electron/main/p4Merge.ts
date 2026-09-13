@@ -650,6 +650,29 @@ export function dedupeCommonParentDirs(paths: string[]): string[] {
 }
 
 /**
+ * 把目标 Workspace 的已打开文件按「与本次 Merge 是否相关」分类（Preflight 健壮判定）.
+ *   - overlapping: depotPath 命中本次 Merge 的 target 路径集合 —— 需 Revert 后 Integrate 到新 CL；
+ *   - otherOpened: 与本次 Merge 无关 —— 仅记 warning 不阻断、不触碰（integrate 只作用于 target 路径，
+ *     这些文件不会被改动，保护别人 WIP 的同时不再阻断流程）.
+ *
+ * 用 Set 加速命中判定，targetPaths 顺序不影响结果；depot 路径严格相等匹配（不做前缀/归一化），
+ * 因为 buildOpenedArgs 返回的 depotPath 与 payload.files[].targetPath 都是 `//depot/...` 规范形式.
+ */
+export function classifyOpenedFiles(
+  opened: P4OpenedFile[],
+  targetPaths: string[],
+): { overlapping: P4OpenedFile[]; otherOpened: P4OpenedFile[] } {
+  const targetPathSet = new Set(targetPaths)
+  const overlapping: P4OpenedFile[] = []
+  const otherOpened: P4OpenedFile[] = []
+  for (const f of opened) {
+    if (targetPathSet.has(f.depotPath)) overlapping.push(f)
+    else otherOpened.push(f)
+  }
+  return { overlapping, otherOpened }
+}
+
+/**
  * 构造目标 Pending Changelist 的描述（spec §18）.
  * 用户期望：描述直接沿用源 changelist 的描述，再额外加上 `merge` 字样，
  *   形如 `merge 增加ksbc table级别的lua化 #361226`，在 P4V Pending 列表里一眼能看出

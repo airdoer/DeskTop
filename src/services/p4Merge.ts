@@ -151,9 +151,8 @@ export interface ExecuteMergeParams {
   /** Sync 模式：file（默认）= 只 sync CL 涉及文件；directory = sync 共同父目录 /... */
   syncMode: 'file' | 'directory'
   /**
-   * 用户确认后置 true：Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge
-   * 涉及的文件时，会返回 needConfirm 让 UI 弹确认；用户确认后带此标志重跑，
-   * 主进程先 revert 这些重叠文件再继续 Sync/Integrate.
+   * @deprecated 不再使用：Preflight 现在自动 Revert 重叠文件，无需用户确认.
+   * 保留字段仅为向后兼容旧前端；新逻辑下传入会被主进程忽略.
    */
   revertOverlapping?: boolean
 }
@@ -169,12 +168,18 @@ export interface ExecuteResult {
   backupDir?: string
   error?: string
   /**
-   * Preflight 检测到目标 Workspace 的 Pending CL 中已有本次 Merge 涉及的文件，
-   * 需要用户确认是否 revert 这些文件后继续。UI 据此弹出确认 UI.
-   * 此时 ok 为 false、error 为提示文案，用户确认后带 revertOverlapping=true 重跑.
+   * Preflight 收集的非阻断 warning 文案（如「检测到 N 个无关已打开文件，已忽略」、
+   * 「N 个重叠文件已自动 Revert 并归入新 CL」）. 前端据此 toast.warning 提示；
+   * 完整 warning 行也写入 preflight 步骤日志（MergePipeline Modal 可查看）.
+   * ok=true 时如果非空，代表 Merge 成功但有需要用户知晓的提示.
+   */
+  warnings?: string[]
+  /**
+   * @deprecated 不再使用：Preflight 现在自动 Revert 重叠文件，无需用户确认.
+   * 保留字段仅为向后兼容旧前端；新逻辑下永远为 undefined.
    */
   needConfirm?: boolean
-  /** needConfirm=true 时携带的重叠已打开文件列表（depot 路径 + change + action） */
+  /** @deprecated 同 needConfirm，不再返回。 */
   overlappingOpened?: P4OpenedFile[]
 }
 

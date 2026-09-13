@@ -12,6 +12,7 @@ import {
   buildResolveOverrideArgs,
   buildRevertArgs,
   buildSyncArgs,
+  classifyOpenedFiles,
   computeMergePreview,
   createInitialPipeline,
   dedupeCommonParentDirs,
@@ -30,6 +31,7 @@ import {
   replaceChangeFormDescription,
   resolveMergeToolArgs,
   summarizeP4Error,
+  type P4OpenedFile,
 } from '../electron/main/p4Merge'
 import {
   buildRedmineIssueUrl,
@@ -565,6 +567,74 @@ describe('buildOpenedArgs（Preflight「目标 Workspace 未提交修改」查�
     expect(buildOpenedArgs({ client: CLIENT, change: 2137156 })).toEqual([
       '-c', CLIENT, 'opened', '-c', '2137156',
     ])
+  })
+})
+
+describe('classifyOpenedFiles（Preflight 健壮分类：overlapping vs otherOpened）', () => {
+  // 构造一个已打开文件的 helper：只关心 depotPath 与可选的 change/client
+  const opened = (depotPath: string, extra: Partial<P4OpenedFile> = {}): P4OpenedFile => ({
+    depotPath,
+    revision: '1',
+    action: 'edit',
+    change: 'default',
+    ...extra,
+  })
+
+  it('目标路径集合内的已打开文件归入 overlapping', () => {
+    const res = classifyOpenedFiles(
+      [opened('//C7/Dev/Weekly/Client/A.lua'), opened('//C7/Dev/Weekly/Client/B.lua')],
+      ['//C7/Dev/Weekly/Client/A.lua'],
+    )
+    expect(res.overlapping.map((f) => f.depotPath)).toEqual(['//C7/Dev/Weekly/Client/A.lua'])
+    expect(res.otherOpened.map((f) => f.depotPath)).toEqual(['//C7/Dev/Weekly/Client/B.lua'])
+  })
+
+  it('全部命中时 otherOpened 为空', () => {
+    const res = classifyOpenedFiles(
+      [opened('//a/A.lua'), opened('//a/B.lua')],
+      ['//a/A.lua', '//a/B.lua'],
+    )
+    expect(res.overlapping).toHaveLength(2)
+    expect(res.otherOpened).toHaveLength(0)
+  })
+
+  it('全部无关时 overlapping 为空', () => {
+    const res = classifyOpenedFiles(
+      [opened('//other/X.lua'), opened('//other/Y.lua')],
+      ['//a/A.lua'],
+    )
+    expect(res.overlapping).toHaveLength(0)
+    expect(res.otherOpened).toHaveLength(2)
+  })
+
+  it('空已打开文件 → 两个分类都为空', () => {
+    const res = classifyOpenedFiles([], ['//a/A.lua'])
+    expect(res.overlapping).toEqual([])
+    expect(res.otherOpened).toEqual([])
+  })
+
+  it('空 target 路径集合 → 全部归入 otherOpened（无一文件被视作重叠）', () => {
+    const res = classifyOpenedFiles([opened('//a/A.lua')], [])
+    expect(res.overlapping).toEqual([])
+    expect(res.otherOpened).toHaveLength(1)
+  })
+
+  it('depot 路径严格相等匹配：前缀命中不算 overlapping', () => {
+    // '//a/A.lua' 不应被 '//a/A' 前缀误判为 overlapping
+    const res = classifyOpenedFiles(
+      [opened('//a/A.lua'), opened('//a/A.lua.bak')],
+      ['//a/A'],
+    )
+    expect(res.overlapping).toEqual([])
+    expect(res.otherOpened).toHaveLength(2)
+  })
+
+  it('保留 P4OpenedFile 的其它字段（change / client / action），分类只按 depotPath', () => {
+    const a = opened('//a/A.lua', { change: '1234', client: 'ws_a', action: 'edit' })
+    const b = opened('//other/B.lua', { change: 'default', client: 'ws_b', action: 'add' })
+    const res = classifyOpenedFiles([a, b], ['//a/A.lua'])
+    expect(res.overlapping).toEqual([a])
+    expect(res.otherOpened).toEqual([b])
   })
 })
 
