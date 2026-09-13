@@ -9,6 +9,7 @@ import {
 import { EmptyState } from '@/components/layout/EmptyState'
 import { Page, PageBody, PageHeader } from '@/components/layout/Page'
 import { AppButton } from '@/components/ui/AppButton'
+import { BrickIcon } from '@/components/ui/icons'
 import {
   addHomeWidget,
   availableHomeWidgets,
@@ -33,6 +34,9 @@ import {
  *
  * 依据用户要求：主页由用户自行组合——添加 / 删除 / 拖动排序，布局持久化后下次打开自动恢复。
  * 可拼装的组件见 features/home/homeWidgets.tsx（= 除主页与设置外的全部功能页签）。
+ *
+ * 标题区：品牌语「随心拼接你的游戏工作平台」+ 积木图标走 PageHeader 的 titleAside，
+ *   与标题同一行（不占第二行）；编辑态的操作说明才用 description 占第二行。
  *
  * 排布：单列纵排，每一项独占一行——即便窗口最大化也不并排，
  *   让每条信息保持完整宽度，便于阅读多列条目（P4 工作区路径、Redmine 表格等）。
@@ -132,10 +136,18 @@ export function HomePage() {
     <Page>
       <PageHeader
         title="主页"
+        /*
+         * 标语走 titleAside（标题同一行右侧）而不是 description（第二行）：
+         * 它是常驻的品牌语，不占操作说明的行；编辑态才用 description 显示操作提示。
+         */
+        titleAside={
+          <span className="inline-flex items-center gap-1.5">
+            <BrickIcon size={13} />
+            随心拼接你的游戏工作平台
+          </span>
+        }
         description={
-          editing
-            ? '拖动把手调整顺序，或用 ↑/↓ 按钮移动；不需要的组件可直接移除'
-            : '按需拼装你关注的模块'
+          editing ? '拖动把手调整顺序，或用 ↑/↓ 按钮移动；不需要的组件可直接移除' : undefined
         }
         actions={
           <>

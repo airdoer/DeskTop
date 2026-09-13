@@ -585,3 +585,19 @@ export function RestoreIcon(props: IconProps) {
     </svg>
   )
 }
+
+/**
+ * 积木（乐高）：主页标题右侧的「可拼装」语义标识.
+ * 一块带两个凸点的积木 —— 表达模块像积木一样随心拼接。
+ * 凸点底边与积木顶边同处 y=8（重合为同一条线），因此不需要额外画分隔线，
+ * 也不会有两条线交叉的杂乱感。
+ */
+export function BrickIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="8" width="18" height="12" rx="2" />
+      <rect x="6.5" y="4.5" width="5" height="3.5" rx="1" />
+      <rect x="13.5" y="4.5" width="5" height="3.5" rx="1" />
+    </svg>
+  )
+}
