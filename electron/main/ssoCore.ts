@@ -18,15 +18,32 @@ export const SSO_BASE_URL = 'https://sso.corp.kuaishou.com'
 export const SSO_SERVICE_URL = 'https://desktop.corp.kuaishou.com/cas/callback'
 
 export interface SsoSession {
-  /** SSO 返回的用户名（邮箱前缀，如 chenzhixu） */
+  /** SSO 返回的用户名（邮箱前缀，如 chenzhixu）；调试态下为被覆盖的调试用户名 */
   username: string
   /** 登录时间（ISO 字符串，回显用） */
   loginAt: string
+  /**
+   * 是否处于「调试身份」态.
+   * 为 true 时 username 是被覆盖的调试用户，**不是**真实登录用户。
+   * 只在开发自测时出现（入口见 UserMenu 的调试菜单），重启应用即恢复。
+   */
+  impersonated?: boolean
+  /** 被覆盖掉的真实登录用户名；仅 impersonated 为 true 时存在 */
+  realUsername?: string
 }
 
 export interface SsoResult {
   success: boolean
   username?: string
+  error?: string
+}
+
+/** 「设置 / 清除调试身份」的结果（与 src/services/sso.ts 同构） */
+export interface ImpersonationResult {
+  ok: boolean
+  /** 设置后的有效 session；未登录时为 null */
+  session: SsoSession | null
+  /** 失败原因（ok 为 false 时存在），由渲染层直接 Toast */
   error?: string
 }
 
@@ -100,4 +117,47 @@ export function parseCasUser(xml: string): SsoResult {
     return { success: false, error: reason }
   }
   return { success: false, error: 'SSO 响应格式无法识别' }
+}
+
+/**
+ * 归一化「调试身份」输入.
+ *
+ * trim 后为空（含 null / undefined / 非字符串）一律视为「取消覆盖」→ 返回 null。
+ * 这样调用方不必区分「传空串」和「传 null」，「恢复真实身份」只有一个入口。
+ * 纯函数：便于单元测试覆盖。
+ */
+export function normalizeImpersonationLogin(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  return trimmed ? trimmed : null
+}
+
+/**
+ * 合成「有效 session」= 真实 session + 可选的调试身份覆盖.
+ *
+ * 规则：
+ *   1. 没有真实 session → 返回 null。**未登录不允许被覆盖成别人**，否则等于绕过登录门禁；
+ *   2. 没有覆盖 → 原样返回真实 session，且**不附加 impersonated 字段**，
+ *      避免渲染层把一次正常登录误判成调试态；
+ *   3. 覆盖值等于真实用户名（忽略大小写）→ 视为没有覆盖，切到自己不该进调试态；
+ *   4. 其余 → 覆盖 username，并带上 impersonated + realUsername，
+ *      让 UI 能显示「当前是调试身份、真实用户是谁」并提供一键恢复。
+ *
+ * loginAt 沿用真实登录时间：调试身份不是一次真实登录，另编一个时间只会误导。
+ * 纯函数：便于单元测试覆盖。
+ */
+export function applyImpersonation(
+  real: SsoSession | null,
+  impersonatedLogin: string | null,
+): SsoSession | null {
+  if (!real) return null
+  const target = normalizeImpersonationLogin(impersonatedLogin)
+  if (!target) return real
+  if (target.toLowerCase() === real.username.toLowerCase()) return real
+  return {
+    username: target,
+    loginAt: real.loginAt,
+    impersonated: true,
+    realUsername: real.username,
+  }
 }

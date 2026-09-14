@@ -20,7 +20,14 @@
  *   客户端 APP 没有后端，service 地址不需要真的存在，仅作为 CAS 回传 ticket 的载体，
  *   我们只从重定向 URL 里取 ticket，不真的让浏览器加载这个地址。
  *
- * 纯函数（URL 构造、XML 解析、ticket 提取）抽到 ./ssoCore.ts，便于单元测试覆盖。
+ * 纯函数（URL 构造、XML 解析、ticket 提取、调试身份合成）抽到 ./ssoCore.ts，便于单元测试覆盖。
+ *
+ * 调试身份（impersonation）：
+ *   为了自测「其他用户能看到什么」（如某人的 Redmine 单子），主进程持有一个内存级的用户名覆盖值。
+ *   **刻意不落盘**——覆盖值随进程退出消失，重启即回到真实登录身份，
+ *   避免出现「忘了切回来、以为自己的数据丢了」。登出与重新登录同样会清掉它。
+ *   由于 readSsoSession() 是所有消费方（标题栏、Redmine 面板、P4V 打开用户）的唯一来源，
+ *   覆盖只需在此处合成一次即可全局生效。
  */
 import { app, BrowserWindow } from 'electron'
 import fs from 'node:fs/promises'
@@ -28,10 +35,13 @@ import path from 'node:path'
 import {
   SSO_BASE_URL,
   SSO_SERVICE_URL,
+  applyImpersonation,
   buildSsoLoginUrl,
   buildTicketValidateUrl,
+  normalizeImpersonationLogin,
   parseCasUser,
   parseTicketFromUrl,
+  type ImpersonationResult,
   type SsoSession,
   type SsoResult,
 } from './ssoCore'
@@ -40,12 +50,14 @@ import {
 export {
   SSO_BASE_URL,
   SSO_SERVICE_URL,
+  applyImpersonation,
   buildSsoLoginUrl,
   buildTicketValidateUrl,
+  normalizeImpersonationLogin,
   parseCasUser,
   parseTicketFromUrl,
 }
-export type { SsoSession, SsoResult }
+export type { ImpersonationResult, SsoSession, SsoResult }
 
 /** 登录态持久化文件名（与其它 store 同目录：userData/） */
 const SESSION_FILE = 'sso-session.json'
@@ -57,8 +69,15 @@ function sessionPath(): string {
   return path.join(app.getPath('userData'), SESSION_FILE)
 }
 
-/** 读取本地 SSO session（启动时回显已登录用户用） */
-export async function readSsoSession(): Promise<SsoSession | null> {
+/*
+ * 调试身份覆盖值（仅内存，刻意不落盘）.
+ * null = 不覆盖，按真实登录身份运行。
+ * 放在模块作用域而非文件：重启进程即消失，这正是「重启恢复真实身份」的实现方式。
+ */
+let impersonatedLogin: string | null = null
+
+/** 读取本地 SSO session 的**真实**内容（不含调试覆盖） */
+async function readRealSsoSession(): Promise<SsoSession | null> {
   try {
     const raw = await fs.readFile(sessionPath(), 'utf-8')
     const parsed = JSON.parse(raw) as unknown
@@ -73,15 +92,43 @@ export async function readSsoSession(): Promise<SsoSession | null> {
   }
 }
 
-/** 写入本地 SSO session */
+/**
+ * 读取**有效** SSO session（启动时回显已登录用户用）.
+ *
+ * 这是全应用（主进程与渲染层）获取「当前是谁」的唯一来源，
+ * 返回的是「真实 session + 调试覆盖」合成后的结果，因此切换调试身份无需改任何消费方。
+ */
+export async function readSsoSession(): Promise<SsoSession | null> {
+  return applyImpersonation(await readRealSsoSession(), impersonatedLogin)
+}
+
+/**
+ * 设置 / 清除调试身份覆盖.
+ *
+ * 只改内存，不碰 sso-session.json：真实登录态必须始终完好，
+ * 否则「恢复真实身份」就无从谈起，而且会污染登出/重登流程。
+ *
+ * @param login 目标用户名；null / 空串表示恢复真实身份
+ */
+export function setImpersonatedLogin(login: string | null): void {
+  impersonatedLogin = normalizeImpersonationLogin(login)
+}
+
+/**
+ * 写入本地 SSO session.
+ * 一次真实的 SSO 登录会**清掉调试覆盖**：用户重新登录即代表「我要用自己的身份」，
+ * 若继续带着旧覆盖，登录成功却仍显示别人的名字，是明确的错误行为。
+ */
 export async function writeSsoSession(username: string): Promise<void> {
   const session: SsoSession = { username, loginAt: new Date().toISOString() }
   await fs.mkdir(path.dirname(sessionPath()), { recursive: true })
   await fs.writeFile(sessionPath(), JSON.stringify(session, null, 2), 'utf-8')
+  impersonatedLogin = null
 }
 
-/** 清除本地 SSO session（登出） */
+/** 清除本地 SSO session（登出），同时清掉调试覆盖 */
 export async function clearSsoSession(): Promise<void> {
+  impersonatedLogin = null
   try {
     await fs.unlink(sessionPath())
   } catch {

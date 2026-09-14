@@ -248,6 +248,33 @@ export async function resolveRedmineUserId(userName: string): Promise<number | n
 }
 
 /**
+ * 用户查询的三态结果.
+ * 调用方（如「切换调试身份」的校验）必须区分「查无此人」与「查询失败」：
+ * 前者是用户输入问题，提示改名字即可；后者是网络/权限问题，提示重试或换 Key。
+ */
+export type RedmineUserLookup =
+  | { status: 'found'; userId: number }
+  | { status: 'not-found' }
+  | { status: 'error'; message: string }
+
+/**
+ * 查询 Redmine 用户是否存在（把 resolveRedmineUserId 的「null / 抛异常」两种失败收敛成三态）.
+ *
+ * 与 resolveRedmineUserId 的分工：后者是内部原语（返回 id 或 null，异常外抛），
+ * 本函数是对外可用的**结果化**包装，让调用方不必自己判异常类型。
+ */
+export async function lookupRedmineUser(login: string): Promise<RedmineUserLookup> {
+  const trimmed = (login ?? '').trim()
+  if (!trimmed) return { status: 'not-found' }
+  try {
+    const userId = await resolveRedmineUserId(trimmed)
+    return userId === null ? { status: 'not-found' } : { status: 'found', userId }
+  } catch (e) {
+    return { status: 'error', message: toUserLookupError(e) }
+  }
+}
+
+/**
  * 构造 Redmine issues.json 查询参数.
  * 使用 Web UI 同款 f[]/op[]/v[] 语法以精确表达 "fixed_version_id != 223" 这类否定过滤。
  * 纯函数：不访问网络，便于单元测试覆盖。

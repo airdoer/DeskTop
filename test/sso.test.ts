@@ -3,10 +3,13 @@ import { describe, it, expect } from 'vitest'
 import {
   SSO_BASE_URL,
   SSO_SERVICE_URL,
+  applyImpersonation,
   buildSsoLoginUrl,
   buildTicketValidateUrl,
+  normalizeImpersonationLogin,
   parseCasUser,
   parseTicketFromUrl,
+  type SsoSession,
 } from '../electron/main/ssoCore'
 
 /*
@@ -182,5 +185,87 @@ describe('parseCasUser', () => {
     const result = parseCasUser(xml)
     expect(result.success).toBe(true)
     expect(result.username).toBe('differentCase')
+  })
+})
+
+/*
+ * 调试身份（impersonation）纯函数测试.
+ *
+ * 这组函数决定「当前是谁」，一旦算错会让用户看到别人的数据，
+ * 因此边界（未登录 / 空值 / 切到自己 / 大小写）必须逐个锁死。
+ */
+
+describe('normalizeImpersonationLogin', () => {
+  it('两侧空白会被 trim', () => {
+    expect(normalizeImpersonationLogin('  chenzhixu  ')).toBe('chenzhixu')
+  })
+
+  it('空串与纯空白一律视为「取消覆盖」返回 null', () => {
+    expect(normalizeImpersonationLogin('')).toBeNull()
+    expect(normalizeImpersonationLogin('   ')).toBeNull()
+  })
+
+  it('null / undefined / 非字符串返回 null（不抛异常）', () => {
+    expect(normalizeImpersonationLogin(null)).toBeNull()
+    expect(normalizeImpersonationLogin(undefined)).toBeNull()
+    expect(normalizeImpersonationLogin(123)).toBeNull()
+    expect(normalizeImpersonationLogin({ login: 'x' })).toBeNull()
+  })
+})
+
+describe('applyImpersonation', () => {
+  const REAL: SsoSession = { username: 'chenzhixu', loginAt: '2026-09-14T12:00:00.000Z' }
+
+  it('没有真实 session 时返回 null —— 未登录不允许被覆盖成别人', () => {
+    // 否则等于绕过 LoginGate：本地没有登录态却能拿到一个「已登录」的 session
+    expect(applyImpersonation(null, 'hantao03')).toBeNull()
+  })
+
+  it('没有覆盖时原样返回真实 session', () => {
+    expect(applyImpersonation(REAL, null)).toEqual(REAL)
+  })
+
+  it('无覆盖时不附加 impersonated 字段（避免正常登录被误判成调试态）', () => {
+    const result = applyImpersonation(REAL, null)
+    expect(result).not.toBeNull()
+    expect('impersonated' in (result as SsoSession)).toBe(false)
+    expect('realUsername' in (result as SsoSession)).toBe(false)
+  })
+
+  it('覆盖值等于真实用户名时视为没有覆盖（切到自己不该进调试态）', () => {
+    expect(applyImpersonation(REAL, 'chenzhixu')).toEqual(REAL)
+    expect(applyImpersonation(REAL, 'ChenZhiXu')).toEqual(REAL)
+  })
+
+  it('正常覆盖：username 被替换，并带上 impersonated 与 realUsername', () => {
+    const result = applyImpersonation(REAL, 'hantao03')
+    expect(result).toEqual({
+      username: 'hantao03',
+      loginAt: REAL.loginAt,
+      impersonated: true,
+      realUsername: 'chenzhixu',
+    })
+  })
+
+  it('覆盖值两侧空白会被 trim 后再比较与使用', () => {
+    expect(applyImpersonation(REAL, '  hantao03  ')?.username).toBe('hantao03')
+    // trim 后等于自己 → 仍然不进入调试态
+    expect(applyImpersonation(REAL, ' chenzhixu ')?.impersonated).toBeUndefined()
+  })
+
+  it('空串覆盖等价于不覆盖', () => {
+    expect(applyImpersonation(REAL, '')).toEqual(REAL)
+    expect(applyImpersonation(REAL, '   ')).toEqual(REAL)
+  })
+
+  it('loginAt 沿用真实登录时间（调试身份不是一次真实登录）', () => {
+    const result = applyImpersonation(REAL, 'hantao03')
+    expect(result?.loginAt).toBe('2026-09-14T12:00:00.000Z')
+  })
+
+  it('不修改传入的真实 session（纯函数，无副作用）', () => {
+    const real: SsoSession = { username: 'chenzhixu', loginAt: '2026-09-14T12:00:00.000Z' }
+    applyImpersonation(real, 'hantao03')
+    expect(real).toEqual({ username: 'chenzhixu', loginAt: '2026-09-14T12:00:00.000Z' })
   })
 })

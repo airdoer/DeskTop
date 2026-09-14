@@ -9,37 +9,87 @@
  *      去掉原生 titleBarOverlay 后，最小化/最大化/关闭由渲染层按钮触发，经 IPC 转发到主进程。
  */
 
-/** SSO 登录态快照（与 electron/main/sso.ts 的 SsoSession 同构） */
+/** SSO 登录态快照（与 electron/main/ssoCore.ts 的 SsoSession 同构，改必须同步） */
 export interface SsoSession {
-  /** SSO 返回的用户名（邮箱前缀，如 chenzhixu） */
+  /** SSO 返回的用户名（邮箱前缀，如 chenzhixu）；调试态下为被覆盖的调试用户名 */
   username: string
   /** 登录时间（ISO 字符串） */
   loginAt: string
+  /** 是否处于「调试身份」态：username 是被覆盖的调试用户，不是真实登录用户 */
+  impersonated?: boolean
+  /** 被覆盖掉的真实登录用户名；仅 impersonated 为 true 时存在 */
+  realUsername?: string
 }
 
-/** SSO 登录结果（与 electron/main/sso.ts 的 SsoResult 同构） */
+/** SSO 登录结果（与 electron/main/ssoCore.ts 的 SsoResult 同构） */
 export interface SsoResult {
   success: boolean
   username?: string
   error?: string
 }
 
+/** 「设置 / 清除调试身份」的结果（与 electron/main/ssoCore.ts 的 ImpersonationResult 同构） */
+export interface ImpersonationResult {
+  ok: boolean
+  session: SsoSession | null
+  error?: string
+}
+
 const EMPTY_SESSION: SsoSession | null = null
+
+/**
+ * 把主进程返回的原始对象收敛成 SsoSession.
+ * 主进程与渲染层是两次独立的序列化，字段缺失/类型漂移都可能发生，
+ * 故这里做一次完整校验而不是直接断言——调试态字段缺失只会退化为「普通登录态」，不会崩。
+ */
+function toSsoSession(raw: unknown): SsoSession | null {
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+  const username = typeof obj.username === 'string' ? obj.username.trim() : ''
+  if (!username) return null
+  const session: SsoSession = {
+    username,
+    loginAt: typeof obj.loginAt === 'string' ? obj.loginAt : '',
+  }
+  // impersonated 严格判 true：字符串 "false" / 缺省都视为非调试态
+  if (obj.impersonated === true) {
+    session.impersonated = true
+    session.realUsername = typeof obj.realUsername === 'string' ? obj.realUsername.trim() : ''
+  }
+  return session
+}
 
 /** 读取本地 SSO session（启动时回显已登录用户） */
 export async function getSsoSession(): Promise<SsoSession | null> {
   try {
     const result = await window.ipcRenderer.invoke('sso:get-session')
-    const session = result as SsoSession | null | undefined
-    if (!session || typeof session !== 'object') return EMPTY_SESSION
-    if (typeof session.username !== 'string' || !session.username.trim()) return EMPTY_SESSION
-    return {
-      username: session.username.trim(),
-      loginAt: typeof session.loginAt === 'string' ? session.loginAt : '',
-    }
+    return toSsoSession(result)
   } catch {
     // 主进程未注册该 handler（旧版本）时降级为未登录，不阻断页面渲染
     return EMPTY_SESSION
+  }
+}
+
+/**
+ * 设置 / 清除调试身份（自测用：以其他用户的视角运行本工具）.
+ *
+ * @param login 目标登录名；null / 空串表示恢复真实身份
+ * @returns ok + 设置后的有效 session；失败时 error 为可直接展示的原因
+ *
+ * 覆盖值只存在于主进程内存中，**不落盘**，退出应用即恢复真实身份。
+ */
+export async function setImpersonatedUser(login: string | null): Promise<ImpersonationResult> {
+  try {
+    const result = await window.ipcRenderer.invoke('sso:set-impersonation', login)
+    const raw = result as ImpersonationResult | undefined
+    if (!raw || typeof raw !== 'object') return { ok: false, session: null, error: '无响应' }
+    return {
+      ok: raw.ok === true,
+      session: toSsoSession(raw.session),
+      error: typeof raw.error === 'string' ? raw.error : undefined,
+    }
+  } catch (e) {
+    return { ok: false, session: null, error: e instanceof Error ? e.message : String(e) }
   }
 }
 

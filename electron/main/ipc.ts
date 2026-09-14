@@ -61,9 +61,18 @@ import {
   type EncodingRepairResult,
   type EncodingStatus,
 } from './encoding'
-import { fetchRedmineIssues } from './redmine'
+import { fetchRedmineIssues, lookupRedmineUser } from './redmine'
 import { normalizeWebsiteUrl, sanitizeWebsiteConfig, type WebsiteConfig } from './websites'
-import { startSsoLogin, readSsoSession, clearSsoSession, type SsoSession, type SsoResult } from './sso'
+import {
+  startSsoLogin,
+  readSsoSession,
+  clearSsoSession,
+  setImpersonatedLogin,
+  normalizeImpersonationLogin,
+  type ImpersonationResult,
+  type SsoSession,
+  type SsoResult,
+} from './sso'
 import {
   readAppConfigInfo,
   resetAppConfig,
@@ -1097,6 +1106,44 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     await clearSsoSession()
     return { ok: true }
   })
+
+  /*
+   * 设置 / 清除调试身份（自测用：以其他用户的视角运行本工具）.
+   *
+   * 入参 login 为 null / 空串 → 恢复真实身份；否则**先校验该用户名在 Redmine 确实存在**，
+   * 再写入内存覆盖值（不落盘，见 sso.ts 的说明）。
+   *
+   * 为什么校验放在主进程：①渲染层的校验可被绕过，而这是「身份」相关操作；
+   * ②校验依赖 Redmine API Key，Key 只存在于主进程。
+   *
+   * 校验的三态必须分开报：查无此人是「名字打错了」，查询失败是「网络/权限问题」，
+   * 混成一句「切换失败」会让自测时无从下手。
+   */
+  ipcMain.handle(
+    'sso:set-impersonation',
+    async (_, login?: string | null): Promise<ImpersonationResult> => {
+      const target = normalizeImpersonationLogin(login)
+      if (target === null) {
+        setImpersonatedLogin(null)
+        return { ok: true, session: await readSsoSession() }
+      }
+
+      const lookup = await lookupRedmineUser(target)
+      if (lookup.status === 'not-found') {
+        return {
+          ok: false,
+          error: `Redmine 中查无用户「${target}」，请检查登录名`,
+          session: await readSsoSession(),
+        }
+      }
+      if (lookup.status === 'error') {
+        return { ok: false, error: lookup.message, session: await readSsoSession() }
+      }
+
+      setImpersonatedLogin(target)
+      return { ok: true, session: await readSsoSession() }
+    },
+  )
 
   /* ---------- 自定义窗口控制按钮 ---------- */
 
