@@ -587,6 +587,20 @@ export function RestoreIcon(props: IconProps) {
 }
 
 /**
+ * 置顶：一枚图钉（帽 + 颈 + 针），用于标题栏「窗口置顶」按钮.
+ * 与最小化/最大化同属窗口控制图标，故与它们相邻定义。
+ * 开启态不靠图标本身区分，由按钮底色 + 主色文字表达（见 TitleBar 的 WindowButton）。
+ */
+export function PinIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M7 3.5h10v4h-3v3.5h-4V7.5H7v-4z" />
+      <path d="M12 11v9.5" />
+    </svg>
+  )
+}
+
+/**
  * 积木（乐高）：主页标题右侧的「可拼装」语义标识.
  * 一块带两个凸点的积木 —— 表达模块像积木一样随心拼接。
  * 凸点底边与积木顶边同处 y=8（重合为同一条线），因此不需要额外画分隔线，

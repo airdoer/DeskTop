@@ -3,14 +3,17 @@ import {
   CloseIcon,
   MaximizeIcon,
   MinimizeIcon,
+  PinIcon,
   RestoreIcon,
 } from '@/components/ui/icons'
 import { Greeting, useGreeting } from '@/features/greeting/Greeting'
 import {
   closeWindow,
+  isWindowAlwaysOnTop,
   isWindowMaximized,
   minimizeWindow,
   subscribeMaximizedChanged,
+  toggleAlwaysOnTop,
   toggleMaximizeWindow,
 } from '@/services/sso'
 import { TabBar } from './TabBar'
@@ -23,11 +26,12 @@ import type { Tab } from './tabs/tabTypes'
  * 依据 docs/UI_DESIGN_SYSTEM.md §3/§4：Shell 统一提供标题栏。
  *
  * 布局（与 Chrome 类似，标签栏嵌入标题栏）：
- *   [TabBar … 拖拽区（问候语右对齐贴住 Persona）…] [按钮组：UserMenu | 最小化 | 最大化/还原 | 关闭]
+ *   [TabBar … 拖拽区（问候语右对齐贴住 Persona）…] [按钮组：UserMenu | 置顶 | 最小化 | 最大化/还原 | 关闭]
  *   - 整条高度 36px，与 electron/main/index.ts 的 TITLE_BAR_HEIGHT 保持一致
  *   - TabBar 与按钮组为 app-region-no-drag，确保可点击；其余为窗口拖拽区
  *   - TabBar 的空白处（标签之间或末尾）由 TabBar 内部 app-region-drag 接管窗口拖拽
  *   - 登录用户按钮位于最小化/最大化/关闭按钮的最左侧（用户要求）
+ *   - 置顶按钮位于「用户信息」与「最小化」之间（用户要求），开启时按钮底色 + 主色高亮
  *
  * 布局修复（2026-09）：TabBar 用 flex-1 独占剩余空间，问候语区 shrink-0 按内容宽度，
  *   避免「TabBar 与问候语区各 flex-1 平分」导致 TabBar 中段截断、右侧空白的 bug.
@@ -83,6 +87,8 @@ export function TitleBar({
   onCycleTab,
 }: TitleBarProps) {
   const [maximized, setMaximized] = useState(false)
+  /** 窗口是否置顶（always on top）；会话级状态，不持久化 */
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const { session, loggedIn } = useSsoSession()
 
   /*
@@ -94,11 +100,18 @@ export function TitleBar({
     username: session?.username ?? undefined,
   })
 
-  // 启动时查询当前最大化状态（订阅推送前先拿一次首帧值）
+  /*
+   * 启动时查询窗口状态首帧值：
+   *   - 最大化：主进程后续会推送 window:maximized-changed，这里先拿一次初值；
+   *   - 置顶：只有本窗口的按钮会改它，主进程不推送，查一次即可。
+   */
   useEffect(() => {
     let alive = true
     void isWindowMaximized().then((value) => {
       if (alive) setMaximized(value)
+    })
+    void isWindowAlwaysOnTop().then((value) => {
+      if (alive) setAlwaysOnTop(value)
     })
     return () => {
       alive = false
@@ -151,6 +164,17 @@ export function TitleBar({
       {/* 右侧按钮组：登录用户 | 最小化 | 最大化/还原 | 关闭 */}
       <div className="app-region-no-drag flex items-stretch">
         {userMenuMode !== 'hidden' && <UserMenu mode={userMenuMode} />}
+        {/* 置顶：位于「用户信息」与「最小化」之间（用户要求），悬浮显示说明 */}
+        <WindowButton
+          onClick={() => {
+            void toggleAlwaysOnTop().then(setAlwaysOnTop)
+          }}
+          title={alwaysOnTop ? '取消置顶' : '窗口置顶'}
+          ariaLabel={alwaysOnTop ? '取消置顶' : '窗口置顶'}
+          active={alwaysOnTop}
+        >
+          <PinIcon size={12} />
+        </WindowButton>
         <WindowButton onClick={() => void minimizeWindow()} title="最小化" ariaLabel="最小化">
           <MinimizeIcon size={11} />
         </WindowButton>
@@ -180,20 +204,27 @@ interface WindowButtonProps {
   ariaLabel: string
   /** 关闭按钮 hover 用红色高亮，对齐 Windows 原生行为 */
   dangerHover?: boolean
+  /**
+   * 激活态（当前仅置顶按钮使用）：用「底色 + 主色文字」表达，与 Sidebar 激活项同一语言，
+   * 不用阴影（§16）。同时落到 aria-pressed，便于读屏识别这是可切换按钮。
+   */
+  active?: boolean
   children: ReactNode
 }
 
-function WindowButton({ onClick, title, ariaLabel, dangerHover, children }: WindowButtonProps) {
+function WindowButton({ onClick, title, ariaLabel, dangerHover, active, children }: WindowButtonProps) {
   const hoverClass = dangerHover
     ? 'hover:bg-error hover:text-white active:bg-error'
     : 'hover:bg-surface-hover hover:text-foreground active:bg-surface-3'
+  const toneClass = active ? 'bg-surface-active text-primary' : 'text-foreground-secondary'
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
       aria-label={ariaLabel}
-      className={`flex items-center justify-center w-[46px] h-full text-foreground-secondary transition-colors ${hoverClass}`}
+      aria-pressed={active}
+      className={`flex items-center justify-center w-[46px] h-full transition-colors ${toneClass} ${hoverClass}`}
     >
       {children}
     </button>

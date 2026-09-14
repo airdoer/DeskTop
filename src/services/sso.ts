@@ -111,6 +111,29 @@ export async function isWindowMaximized(): Promise<boolean> {
 }
 
 /**
+ * 切换主窗口置顶（always on top）.
+ * @returns 切换后是否处于置顶状态
+ */
+export async function toggleAlwaysOnTop(): Promise<boolean> {
+  try {
+    const result = await window.ipcRenderer.invoke('window:toggle-always-on-top')
+    return (result as { ok: boolean; alwaysOnTop: boolean })?.alwaysOnTop ?? false
+  } catch {
+    return false
+  }
+}
+
+/** 查询主窗口当前是否置顶（按钮首帧状态用） */
+export async function isWindowAlwaysOnTop(): Promise<boolean> {
+  try {
+    const result = await window.ipcRenderer.invoke('window:is-always-on-top')
+    return (result as { alwaysOnTop: boolean })?.alwaysOnTop ?? false
+  } catch {
+    return false
+  }
+}
+
+/**
  * 订阅主窗口最大化状态变化（主进程主动推送）.
  * @returns 取消订阅函数
  */

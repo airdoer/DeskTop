@@ -1055,6 +1055,28 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     return { maximized: w.isMaximized() }
   })
 
+  /*
+   * 窗口置顶（always on top）：切换后回传最新状态，渲染层据此渲染按钮激活态。
+   * 与最小化/最大化一样是**会话级**窗口状态，不落盘 —— 重启后回到默认（不置顶）。
+   */
+  ipcMain.handle(
+    'window:toggle-always-on-top',
+    async (): Promise<{ ok: boolean; alwaysOnTop: boolean }> => {
+      const w = getMainWindow()
+      if (!w || w.isDestroyed()) return { ok: false, alwaysOnTop: false }
+      const next = !w.isAlwaysOnTop()
+      w.setAlwaysOnTop(next)
+      return { ok: true, alwaysOnTop: next }
+    },
+  )
+
+  /** 查询窗口当前是否置顶（按钮首帧状态用） */
+  ipcMain.handle('window:is-always-on-top', async (): Promise<{ alwaysOnTop: boolean }> => {
+    const w = getMainWindow()
+    if (!w || w.isDestroyed()) return { alwaysOnTop: false }
+    return { alwaysOnTop: w.isAlwaysOnTop() }
+  })
+
   /* ---------- Cross Branch Merge ---------- */
   /*
    * 依据 docs/CROSS_BRANCH_MERGE_TOOL_SPEC.md：
