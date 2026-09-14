@@ -4,8 +4,9 @@
  *   统一经 IPC Service 转发到 Main Process（API Key 只存在于主进程）。
  *
  * 过滤条件（与用户提供的筛选 URL 一致）：
- *   project=c7, status_id=7（进行中）, assigned_to_id=chenzhixu 的 user_id,
+ *   project=c7, status_id=7（进行中）, assigned_to_id=<登录用户的 user_id>,
  *   fixed_version_id != 223, sort=estimated_hours:desc,id:desc, group_by=fixed_version
+ * 用户名由调用方传入（SSO 登录态）；「用户名 → user_id」的解析在主进程按需查询完成。
  */
 
 export interface RedmineRef {
@@ -57,16 +58,15 @@ const EMPTY: RedmineIssuesSnapshot = {
   totalCount: 0,
 }
 
-/** 默认用户名：当前任务要求先用 chenzhixu */
-export const DEFAULT_REDMINE_USER_NAME = 'chenzhixu'
-
 /**
  * 查询 Redmine 单子.
- * @param userName Redmine 用户名（默认 chenzhixu）；找不到对应 user_id 时主进程返回空列表 + error
+ *
+ * @param userName 登录用户的 SSO 用户名（必填，来自 useSsoSession）。
+ *   刻意不设默认值：默认值会让「忘记传用户名」变成「静默查询某个固定账号的单子」，
+ *   而正确行为是让主进程返回明确的错误提示。找不到该登录名时主进程返回空列表 + error。
  */
-export async function getRedmineIssues(
-  userName: string = DEFAULT_REDMINE_USER_NAME,
-): Promise<RedmineIssuesSnapshot> {
+export async function getRedmineIssues(userName: string): Promise<RedmineIssuesSnapshot> {
+  if (!userName.trim()) return EMPTY
   try {
     const result = await window.ipcRenderer.invoke('redmine:issues', userName)
     const snapshot = result as RedmineIssuesSnapshot | undefined

@@ -3,12 +3,12 @@ import {
   buildIssueFilterParams,
   buildFilterWebUrl,
   buildIssueWebUrl,
-  DEFAULT_REDMINE_USER_NAME,
-  resolveRedmineUserId,
+  buildUserLookupUrl,
+  fetchRedmineIssues,
+  pickUserIdByLogin,
   type RedmineIssueFilter,
 } from '../electron/main/redmine'
 import {
-  DEFAULT_REDMINE_USER_NAME as RENDERER_DEFAULT_USER,
   buildCopyDescriptionText,
   groupIssuesByVersion,
   formatHours,
@@ -22,14 +22,14 @@ import {
 } from '../src/services/redmineIssues'
 
 /*
- * Redmine 过滤参数 / 分组 / 格式化 单元测试.
- * 覆盖 buildIssueFilterParams 的 f[]/op[]/v[] 语法、用户名→id 解析、
+ * Redmine 过滤参数 / 用户解析 / 分组 / 格式化 单元测试.
+ * 覆盖 buildIssueFilterParams 的 f[]/op[]/v[] 语法、用户名→user_id 的接口解析、
  *   分组、工时/日期格式化、优先级着色，以及网页端筛选 URL 与用户提供的 URL 同构。
  */
 
 const baseFilter: RedmineIssueFilter = {
   project: 'c7',
-  userName: DEFAULT_REDMINE_USER_NAME,
+  userName: 'chenzhixu',
   userId: 1077,
   statusId: 7,
   excludeFixedVersionId: 223,
@@ -37,18 +37,184 @@ const baseFilter: RedmineIssueFilter = {
   limit: 100,
 }
 
-describe('resolveRedmineUserId', () => {
-  it('chenzhixu → 1077', () => {
-    expect(resolveRedmineUserId('chenzhixu')).toBe(1077)
+/*
+ * 用户解析：原先是一张 1 条的硬编码映射（只有 chenzhixu），非 chenzhixu 的用户查不到单子。
+ * 现改为按需调用 /users.json，下面锁定接口契约与几条实测踩到的规则。
+ */
+describe('buildUserLookupUrl', () => {
+  it('指向 users.json，带 key / name / status / limit', () => {
+    const url = new URL(buildUserLookupUrl('chenzhixu', 1))
+    expect(url.pathname).toBe('/users.json')
+    expect(url.searchParams.get('key')).toBeTruthy()
+    expect(url.searchParams.get('name')).toBe('chenzhixu')
+    expect(url.searchParams.get('status')).toBe('1')
+    expect(url.searchParams.get('limit')).toBe('100')
   })
 
-  it('未知用户返回 null', () => {
-    expect(resolveRedmineUserId('unknown_user')).toBeNull()
+  it('status 只出现一次（重复传参时后者覆盖前者，必须逐个状态串行查询）', () => {
+    const url = new URL(buildUserLookupUrl('chenzhixu', 3))
+    expect(url.searchParams.getAll('status')).toEqual(['3'])
+  })
+})
+
+describe('pickUserIdByLogin', () => {
+  it('按 login 精确匹配，不取模糊命中的第一条', () => {
+    // 实测 name=chen 命中 79 条，直接取第一条会拿到别人的 id
+    const raw = {
+      users: [
+        { id: 590, login: 'chenchen36' },
+        { id: 1077, login: 'chenzhixu' },
+      ],
+    }
+    expect(pickUserIdByLogin(raw, 'chenzhixu')).toBe(1077)
   })
 
-  it('空白/空字符串返回 null', () => {
-    expect(resolveRedmineUserId('')).toBeNull()
-    expect(resolveRedmineUserId('   ')).toBeNull()
+  it('模糊命中里没有本人时返回 null（不能退而求其次取第一条）', () => {
+    expect(pickUserIdByLogin({ users: [{ id: 590, login: 'chenchen36' }] }, 'chenzhixu')).toBeNull()
+  })
+
+  it('login 大小写不敏感', () => {
+    expect(pickUserIdByLogin({ users: [{ id: 1077, login: 'chenzhixu' }] }, 'ChenZhixu')).toBe(1077)
+  })
+
+  it('id 为字符串时也能解析', () => {
+    expect(pickUserIdByLogin({ users: [{ id: '1077', login: 'chenzhixu' }] }, 'chenzhixu')).toBe(1077)
+  })
+
+  it('结构异常时返回 null', () => {
+    expect(pickUserIdByLogin(null, 'chenzhixu')).toBeNull()
+    expect(pickUserIdByLogin({}, 'chenzhixu')).toBeNull()
+    expect(pickUserIdByLogin({ users: 'oops' }, 'chenzhixu')).toBeNull()
+    expect(pickUserIdByLogin({ users: [null, 1, 'x'] }, 'chenzhixu')).toBeNull()
+    expect(pickUserIdByLogin({ users: [{ id: 0, login: 'chenzhixu' }] }, 'chenzhixu')).toBeNull()
+  })
+
+  it('查询名为空时返回 null', () => {
+    expect(pickUserIdByLogin({ users: [{ id: 1, login: 'chenzhixu' }] }, '   ')).toBeNull()
+  })
+})
+
+describe('fetchRedmineIssues', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** 构造最小 Response 替身：只用到 ok/status/statusText/json */
+  function jsonResponse(body: unknown, status = 200, statusText = 'OK') {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText,
+      json: async () => body,
+    } as unknown as Response
+  }
+
+  it('用户名为空时不发请求，直接返回错误（不再回退到固定账号）', async () => {
+    const spy = vi.fn()
+    vi.stubGlobal('fetch', spy)
+    const snapshot = await fetchRedmineIssues('   ')
+    expect(snapshot.available).toBe(false)
+    expect(snapshot.userId).toBeNull()
+    expect(snapshot.error).toContain('未获取到登录用户名')
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('查不到该登录名时给出明确错误', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ users: [], total_count: 0 })),
+    )
+    const snapshot = await fetchRedmineIssues('no_such_user_zzz')
+    expect(snapshot.available).toBe(false)
+    expect(snapshot.userId).toBeNull()
+    expect(snapshot.error).toContain('找不到登录名为 no_such_user_zzz')
+  })
+
+  it('任意用户都能解析出 user_id 并查询到自己的单子', async () => {
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        calls.push(url)
+        if (url.includes('users.json')) {
+          return jsonResponse({
+            users: [
+              { id: 590, login: 'wangjing6' },
+              { id: 718, login: 'wangjing65' },
+            ],
+            total_count: 2,
+          })
+        }
+        return jsonResponse({ issues: [{ id: 368799, subject: '导表检查功能' }], total_count: 1 })
+      }),
+    )
+
+    const snapshot = await fetchRedmineIssues('wangjing65')
+    expect(snapshot.available).toBe(true)
+    expect(snapshot.userId).toBe(718)
+    expect(snapshot.userName).toBe('wangjing65')
+    expect(snapshot.issues.map((i) => i.id)).toEqual([368799])
+    // 第一次是用户查询（活跃状态），第二次的单子查询带上解析出的 user_id
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toContain('users.json')
+    expect(calls[0]).toContain('status=1')
+    expect(calls[1]).toContain('v%5Bassigned_to_id%5D%5B%5D=718')
+  })
+
+  it('活跃状态查不到时回退查停用状态（停用账号仍能看到自己的单子）', async () => {
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        calls.push(url)
+        if (url.includes('users.json')) {
+          if (url.includes('status=1')) return jsonResponse({ users: [], total_count: 0 })
+          if (url.includes('status=3')) {
+            return jsonResponse({ users: [{ id: 544, login: 'hantao03' }], total_count: 1 })
+          }
+          return jsonResponse({ users: [], total_count: 0 })
+        }
+        return jsonResponse({ issues: [], total_count: 0 })
+      }),
+    )
+
+    const snapshot = await fetchRedmineIssues('hantao03')
+    expect(snapshot.available).toBe(true)
+    expect(snapshot.userId).toBe(544)
+    const lookups = calls.filter((c) => c.includes('users.json'))
+    expect(lookups).toHaveLength(2)
+    expect(lookups[0]).toContain('status=1')
+    expect(lookups[1]).toContain('status=3')
+  })
+
+  it('用户查询遇 403 时点明需要管理员权限，而不是误报成「查无此人」', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({}, 403, 'Forbidden')),
+    )
+    const snapshot = await fetchRedmineIssues('forbidden_probe')
+    expect(snapshot.available).toBe(false)
+    expect(snapshot.error).toContain('403')
+    expect(snapshot.error).toContain('管理员权限')
+  })
+
+  it('单子查询失败时保留已解析出的 userId，便于定位', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        if (url.includes('users.json')) {
+          return jsonResponse({ users: [{ id: 1234, login: 'issues_fail_probe' }], total_count: 1 })
+        }
+        return jsonResponse({}, 500, 'Internal Server Error')
+      }),
+    )
+    const snapshot = await fetchRedmineIssues('issues_fail_probe')
+    expect(snapshot.available).toBe(false)
+    expect(snapshot.userId).toBe(1234)
+    expect(snapshot.error).toContain('500')
   })
 })
 
@@ -194,13 +360,6 @@ describe('priorityColor', () => {
   it('未知优先级降级为灰', () => {
     expect(priorityColor('未知')).toBe('#595959')
     expect(priorityColor(undefined)).toBe('#595959')
-  })
-})
-
-describe('renderer service 默认值与主进程一致', () => {
-  it('DEFAULT_REDMINE_USER_NAME 两端一致', () => {
-    expect(RENDERER_DEFAULT_USER).toBe(DEFAULT_REDMINE_USER_NAME)
-    expect(RENDERER_DEFAULT_USER).toBe('chenzhixu')
   })
 })
 
