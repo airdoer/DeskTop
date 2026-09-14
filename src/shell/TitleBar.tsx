@@ -12,8 +12,8 @@ import {
   isWindowAlwaysOnTop,
   isWindowMaximized,
   minimizeWindow,
+  setWindowAlwaysOnTop,
   subscribeMaximizedChanged,
-  toggleAlwaysOnTop,
   toggleMaximizeWindow,
 } from '@/services/sso'
 import { TabBar } from './TabBar'
@@ -167,7 +167,10 @@ export function TitleBar({
         {/* 置顶：位于「用户信息」与「最小化」之间（用户要求），悬浮显示说明 */}
         <WindowButton
           onClick={() => {
-            void toggleAlwaysOnTop().then(setAlwaysOnTop)
+            // 用本地状态取反后传目标值：不读主进程的 isAlwaysOnTop()，
+            // 因为 DevTools 独立窗口会把主窗口的 topmost 覆盖成 false（见 ipc.ts 的注释）
+            const next = !alwaysOnTop
+            void setWindowAlwaysOnTop(next).then(setAlwaysOnTop)
           }}
           title={alwaysOnTop ? '取消置顶' : '窗口置顶'}
           ariaLabel={alwaysOnTop ? '取消置顶' : '窗口置顶'}

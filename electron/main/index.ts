@@ -95,8 +95,19 @@ async function createWindow() {
 
   if (VITE_DEV_SERVER_URL) { // #298
     win.loadURL(VITE_DEV_SERVER_URL)
-    // Open devTool if the app is not packaged
-    win.webContents.openDevTools()
+    /*
+     * 开发态打开 DevTools，**显式指定 docked（mode: 'right'）**。
+     *
+     * 不能省掉 mode 依赖默认值：DevTools 的停靠状态由 Chromium 持久化在 profile 里，
+     * 一旦被拖成独立窗口，之后每次都按独立窗口打开。而独立的 DevTools 是主窗口的
+     * owned window（Win32 概念），会带来两个后果：
+     *   ① 覆盖 owner 的 always-on-top —— 「窗口置顶」点了没效果，主窗口仍被其他程序挡住
+     *      （主窗口 isAlwaysOnTop() 会被打回 false）；
+     *   ② 同处置顶层时，owned window 永远显示在 owner 之上 —— 主窗口无法压住它。
+     * 显式传 mode 可覆盖这份持久化状态，让开发态的置顶行为与打包态一致
+     * （打包态不打开 DevTools，天然没有这个问题）。
+     */
+    win.webContents.openDevTools({ mode: 'right' })
   } else {
     win.loadFile(indexHtml)
   }

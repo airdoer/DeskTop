@@ -597,6 +597,29 @@ async function collectIpv4(): Promise<{ primary: string; list: string[] }> {
   return selectIpv4(os.networkInterfaces(), await getNicMeta())
 }
 
+/**
+ * 把置顶状态同步给 DevTools 的**独立窗口**（docked 时没有独立窗口，直接跳过）.
+ *
+ * 为什么必须同步：独立的 DevTools 是主窗口的 owned window（Win32），会覆盖 owner 的 topmost
+ * 设置 —— 只设主窗口的话，主窗口照样被其他程序挡住。同步后「主窗口 + DevTools」整体高于其他程序。
+ *
+ * 注意：这**不能让主窗口压住 DevTools**。同一置顶层内 owned window 恒在 owner 之上，
+ * 这是 Win32 规则，Electron 无法反转。要「主窗口在最前、DevTools 在其后」，必须让 DevTools
+ * 保持 docked（见 electron/main/index.ts 的 openDevTools）。
+ *
+ * 失败静默：不同 Electron 版本暴露 DevTools 窗口的方式不同，不能让它影响主窗口置顶。
+ */
+function syncDevToolsAlwaysOnTop(w: BrowserWindow, on: boolean): void {
+  try {
+    const contents = w.webContents.devToolsWebContents
+    if (!contents || contents.isDestroyed()) return
+    const devToolsWindow = BrowserWindow.fromWebContents(contents)
+    if (devToolsWindow && !devToolsWindow.isDestroyed()) devToolsWindow.setAlwaysOnTop(on)
+  } catch {
+    /* DevTools 未打开 / 拿不到独立窗口 —— 没有独立窗口时本就不需要同步 */
+  }
+}
+
 export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): void {
   // 预热网卡元数据缓存，避免首次打开主页时等待 PowerShell 查询（约 1-2s）
   if (process.platform === 'win32') void getNicMeta()
@@ -1056,17 +1079,22 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
   })
 
   /*
-   * 窗口置顶（always on top）：切换后回传最新状态，渲染层据此渲染按钮激活态。
+   * 窗口置顶（always on top）.
+   *
+   * 用「设定目标值」而不是 toggle：Windows 上独立的 DevTools 窗口会覆盖 owner 的 topmost，
+   * 此时 isAlwaysOnTop() 读回来是 false —— 若按它取反，会出现「点一次设不进去、再点也取消不掉」
+   * 的死循环。状态由渲染层持有并传入，这里只负责执行。
+   *
    * 与最小化/最大化一样是**会话级**窗口状态，不落盘 —— 重启后回到默认（不置顶）。
    */
   ipcMain.handle(
-    'window:toggle-always-on-top',
-    async (): Promise<{ ok: boolean; alwaysOnTop: boolean }> => {
+    'window:set-always-on-top',
+    async (_event, value: boolean): Promise<{ ok: boolean; alwaysOnTop: boolean }> => {
       const w = getMainWindow()
       if (!w || w.isDestroyed()) return { ok: false, alwaysOnTop: false }
-      const next = !w.isAlwaysOnTop()
-      w.setAlwaysOnTop(next)
-      return { ok: true, alwaysOnTop: next }
+      w.setAlwaysOnTop(value)
+      syncDevToolsAlwaysOnTop(w, value)
+      return { ok: true, alwaysOnTop: value }
     },
   )
 

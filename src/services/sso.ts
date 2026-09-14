@@ -111,15 +111,21 @@ export async function isWindowMaximized(): Promise<boolean> {
 }
 
 /**
- * 切换主窗口置顶（always on top）.
- * @returns 切换后是否处于置顶状态
+ * 设置主窗口置顶（always on top）.
+ *
+ * 传**目标值**而不是让主进程 toggle：Windows 上独立的 DevTools 窗口会覆盖主窗口的 topmost，
+ * 主进程读 isAlwaysOnTop() 会得到 false —— 按它取反会出现「设不进去也取消不掉」的死循环。
+ * 状态由调用方（TitleBar）持有并传入。
+ *
+ * @param value 目标状态
+ * @returns 实际生效的状态
  */
-export async function toggleAlwaysOnTop(): Promise<boolean> {
+export async function setWindowAlwaysOnTop(value: boolean): Promise<boolean> {
   try {
-    const result = await window.ipcRenderer.invoke('window:toggle-always-on-top')
-    return (result as { ok: boolean; alwaysOnTop: boolean })?.alwaysOnTop ?? false
+    const result = await window.ipcRenderer.invoke('window:set-always-on-top', value)
+    return (result as { ok: boolean; alwaysOnTop: boolean })?.alwaysOnTop ?? value
   } catch {
-    return false
+    return value
   }
 }
 
