@@ -598,6 +598,50 @@ async function collectIpv4(): Promise<{ primary: string; list: string[] }> {
 }
 
 /**
+ * 窗口置顶状态（主进程侧镜像）.
+ * 渲染层也持有同一状态用于按钮高亮，但主进程必须在「失焦 / DevTools 打开」这类时机
+ * **重新应用**置顶（Windows 会在这些时机重置 topmost），因此这里保留一份。
+ */
+let alwaysOnTopEnabled = false
+
+/** 窗口事件监听只绑一次（首次置顶时绑定） */
+let alwaysOnTopHooked = false
+
+/**
+ * 应用置顶状态（Windows）.
+ *
+ * 三个要点，少一个就会出现「点了置顶但窗口仍被遮挡」：
+ *   1. **level 显式给 `screen-saver`**：Electron 默认的 `floating` 只是「任务栏之下」的档位，
+ *      同样置顶的其他程序仍可能盖住它；`screen-saver` 是支持的最高档（任务栏之上）。
+ *   2. **补一次 `moveTop()`**：把它提到同层最前，否则可能被更早置顶的窗口压住。
+ *   3. **失焦 / DevTools 打开后重新应用**：这些时机 Windows 会重置 topmost，
+ *      只设一次会「刚开始有效、用一会儿掉下去」。
+ */
+function applyAlwaysOnTop(w: BrowserWindow, on: boolean): void {
+  alwaysOnTopEnabled = on
+
+  if (on) {
+    w.setAlwaysOnTop(true, 'screen-saver')
+    w.moveTop()
+  } else {
+    w.setAlwaysOnTop(false)
+  }
+  syncDevToolsAlwaysOnTop(w, on)
+
+  if (!alwaysOnTopHooked) {
+    alwaysOnTopHooked = true
+    // 失焦后重新应用：切到其他程序再回来时，topmost 可能已被系统重置
+    w.on('blur', () => {
+      if (alwaysOnTopEnabled && !w.isDestroyed()) applyAlwaysOnTop(w, true)
+    })
+    // DevTools 打开会新建一个 owned window，它会覆盖 owner 的 topmost
+    w.webContents.on('devtools-opened', () => {
+      if (alwaysOnTopEnabled && !w.isDestroyed()) applyAlwaysOnTop(w, true)
+    })
+  }
+}
+
+/**
  * 把置顶状态同步给 DevTools 的**独立窗口**（docked 时没有独立窗口，直接跳过）.
  *
  * 为什么必须同步：独立的 DevTools 是主窗口的 owned window（Win32），会覆盖 owner 的 topmost
@@ -1092,8 +1136,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
     async (_event, value: boolean): Promise<{ ok: boolean; alwaysOnTop: boolean }> => {
       const w = getMainWindow()
       if (!w || w.isDestroyed()) return { ok: false, alwaysOnTop: false }
-      w.setAlwaysOnTop(value)
-      syncDevToolsAlwaysOnTop(w, value)
+      applyAlwaysOnTop(w, value)
       return { ok: true, alwaysOnTop: value }
     },
   )
