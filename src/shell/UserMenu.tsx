@@ -20,6 +20,9 @@ import { useSsoSession } from './ssoSessionContext'
  *   - 'full'：圆点 + 用户图标 + 用户名（默认，tab 少时）
  *   - 'compact'：仅圆点（tab 多到挤压时，让出图标与用户名给 TabBar）
  *   compact 下仍可点击展开下拉菜单，功能不丢，只是首屏只看到一个状态点.
+ *
+ * 内边距是**左右不对称**的（pl-3 / pr-1.5）：左侧要留出与标签栏的呼吸感，
+ * 右侧紧邻置顶按钮，收紧到 6px 才能让「用户名 → 图钉」的间距不至于过空（用户要求）。
  */
 
 type UserMenuMode = 'full' | 'compact'
@@ -91,7 +94,7 @@ export function UserMenu({ mode = 'full' }: UserMenuProps) {
         onClick={loggedIn ? () => setOpen((v) => !v) : handleLogin}
         disabled={loggingIn}
         className={`app-region-no-drag flex items-center gap-1.5 h-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover:bg-surface-hover ${
-          compact ? 'px-2' : 'px-3 text-[12px] leading-none'
+          compact ? 'pl-2 pr-1.5' : 'pl-3 pr-1.5 text-[12px] leading-none'
         } ${loggedIn ? 'text-foreground-secondary hover:text-foreground' : 'text-error hover:text-error'}`}
         title={loggedIn ? session?.username ?? '已登录' : '未登录，点击登录'}
         aria-haspopup="menu"

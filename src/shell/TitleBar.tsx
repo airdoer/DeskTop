@@ -32,6 +32,9 @@ import type { Tab } from './tabs/tabTypes'
  *   - TabBar 的空白处（标签之间或末尾）由 TabBar 内部 app-region-drag 接管窗口拖拽
  *   - 登录用户按钮位于最小化/最大化/关闭按钮的最左侧（用户要求）
  *   - 置顶按钮位于「用户信息」与「最小化」之间（用户要求），开启时按钮底色 + 主色高亮
+ *   - 置顶按钮宽 40px（窗口控制按钮 46px）且 UserMenu 右侧内边距收到 6px：
+ *     两处叠加后「用户名 → 图钉」的间距由 29px 降到 19px（用户要求收紧，实测 CSS px）。
+ *     只改一处不够——原先 12px 内边距 + 46px 按钮的居中留白（17px）会叠成 29px 的空档。
  *
  * 布局修复（2026-09）：TabBar 用 flex-1 独占剩余空间，问候语区 shrink-0 按内容宽度，
  *   避免「TabBar 与问候语区各 flex-1 平分」导致 TabBar 中段截断、右侧空白的 bug.
@@ -175,8 +178,9 @@ export function TitleBar({
           title={alwaysOnTop ? '取消置顶' : '窗口置顶'}
           ariaLabel={alwaysOnTop ? '取消置顶' : '窗口置顶'}
           active={alwaysOnTop}
+          width="pin"
         >
-          <PinIcon size={12} />
+          <PinIcon size={14} />
         </WindowButton>
         <WindowButton onClick={() => void minimizeWindow()} title="最小化" ariaLabel="最小化">
           <MinimizeIcon size={11} />
@@ -212,10 +216,31 @@ interface WindowButtonProps {
    * 不用阴影（§16）。同时落到 aria-pressed，便于读屏识别这是可切换按钮。
    */
   active?: boolean
+  /**
+   * 宽度档位（见 WINDOW_BUTTON_WIDTH）。
+   * 默认 'control'（46px，对齐原生窗口按钮）；置顶按钮用 'pin'（40px）收紧与左侧用户信息的间距。
+   * 用**档位枚举而非直接传类名**：Tailwind 里 `w-[46px]` 与 `w-[40px]` 同时出现在 class 上时，
+   * 谁生效取决于生成顺序而非书写顺序，会随构建漂移。
+   */
+  width?: keyof typeof WINDOW_BUTTON_WIDTH
   children: ReactNode
 }
 
-function WindowButton({ onClick, title, ariaLabel, dangerHover, active, children }: WindowButtonProps) {
+/** 窗口按钮宽度档位：46px 对齐 Windows 原生；40px 用于置顶按钮（收紧左侧间距） */
+const WINDOW_BUTTON_WIDTH = {
+  control: 'w-[46px]',
+  pin: 'w-[40px]',
+} as const
+
+function WindowButton({
+  onClick,
+  title,
+  ariaLabel,
+  dangerHover,
+  active,
+  width = 'control',
+  children,
+}: WindowButtonProps) {
   const hoverClass = dangerHover
     ? 'hover:bg-error hover:text-white active:bg-error'
     : 'hover:bg-surface-hover hover:text-foreground active:bg-surface-3'
@@ -227,7 +252,7 @@ function WindowButton({ onClick, title, ariaLabel, dangerHover, active, children
       title={title}
       aria-label={ariaLabel}
       aria-pressed={active}
-      className={`flex items-center justify-center w-[46px] h-full transition-colors ${toneClass} ${hoverClass}`}
+      className={`flex items-center justify-center ${WINDOW_BUTTON_WIDTH[width]} h-full transition-colors ${toneClass} ${hoverClass}`}
     >
       {children}
     </button>
