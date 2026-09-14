@@ -651,6 +651,14 @@ function applyAlwaysOnTop(w: BrowserWindow, on: boolean): void {
  * 这是 Win32 规则，Electron 无法反转。要「主窗口在最前、DevTools 在其后」，必须让 DevTools
  * 保持 docked（见 electron/main/index.ts 的 openDevTools）。
  *
+ * **docked 必须跳过的根因**（用户报告「点了置顶反而跑到其他窗口下面」）：
+ * docked DevTools 没有独立 BrowserWindow，`BrowserWindow.fromWebContents(devToolsWebContents)`
+ * 返回的是主窗口 `w` 本身（devToolsWebContents attached 到 owner）。
+ * 若不跳过，下面这行就会用默认 level 重新设主窗口：
+ *   `w.setAlwaysOnTop(true)` —— 不传 level 时 level 默认为 `'floating'`，
+ * 把上一行刚设的 `'screen-saver'` **降级回 floating**，主窗口立刻被其他更高层级
+ * （或同层更早置顶）的程序盖住 —— 表现就是「点了置顶按钮，窗口反而跑到下面」。
+ *
  * 失败静默：不同 Electron 版本暴露 DevTools 窗口的方式不同，不能让它影响主窗口置顶。
  */
 function syncDevToolsAlwaysOnTop(w: BrowserWindow, on: boolean): void {
@@ -658,7 +666,12 @@ function syncDevToolsAlwaysOnTop(w: BrowserWindow, on: boolean): void {
     const contents = w.webContents.devToolsWebContents
     if (!contents || contents.isDestroyed()) return
     const devToolsWindow = BrowserWindow.fromWebContents(contents)
-    if (devToolsWindow && !devToolsWindow.isDestroyed()) devToolsWindow.setAlwaysOnTop(on)
+    // docked 模式：fromWebContents 返回 null 或主窗口本身 —— 都没有独立窗口需要同步。
+    // 关键：devToolsWindow === w 时若再 setAlwaysOnTop 会把主窗口 level 降级，**禁止同步**。
+    if (!devToolsWindow || devToolsWindow === w || devToolsWindow.isDestroyed()) return
+    // 独立 DevTools 窗口：与主窗口同层（screen-saver），避免被其他程序盖住；
+    // 同层内 owned window 恒在 owner 之上是 Win32 规则，不影响主窗口相对其他程序的位置。
+    devToolsWindow.setAlwaysOnTop(on, 'screen-saver')
   } catch {
     /* DevTools 未打开 / 拿不到独立窗口 —— 没有独立窗口时本就不需要同步 */
   }
