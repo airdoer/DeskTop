@@ -54,6 +54,22 @@ export default defineConfig(({ command }) => {
 
   return {
     resolve: {
+      /*
+       * 强制 react / react-dom / scheduler 只解析到项目根的那一份。
+       *
+       * 背景：0.0.3 发布版打开黑屏，根因是 renderer bundle 里 React 被内联了两份 ——
+       * react-dom 把 hooks dispatcher 写到「它自己 require 到的那份 react」的
+       * ReactSharedInternals.H，而应用代码的 useState 读的是另一份，读回 null →
+       * 启动即抛 "Cannot read properties of null (reading 'useState')"，界面永不渲染。
+       *
+       * ⚠️ 本项**不是**那次黑屏的已验证修复：实测加与不加产出的 bundle 字节完全相同
+       * （同 md5、同文件名哈希），当时恢复正常只是因为重新构建了。重复实例无法从当前源码
+       * 复现，最可疑诱因是构建与 `pnpm install` 并发导致模块图瞬时重复解析。
+       * 保留它属防御性配置（钉死单一解析路径）；真正的门禁是发布前的产物自检：
+       *   grep -o 'H:null,A:null,T:null' dist/assets/index-*.js | wc -l   # 必须为 1
+       * 详见 .workbuddy-ai/memory/ENVIRONMENT.md 与 docs/BUILD_AND_RELEASE.md。
+       */
+      dedupe: ['react', 'react-dom', 'scheduler'],
       alias: {
         // Vite 8 起配置按 ESM 解析，CJS 的 `__dirname` 已弃用，统一用 `import.meta.dirname`
         '@': path.join(import.meta.dirname, 'src'),
