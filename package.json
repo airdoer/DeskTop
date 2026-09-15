@@ -1,11 +1,11 @@
 {
   "name": "electron-vite-react",
   "productName": "DeskTop",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "description": "Electron Vite React boilerplate.",
   "license": "MIT",
-  "author": "草鞋没号 <308487730@qq.com>",
+  "author": "chenzhixu <chenzhixu@kuaishou.com>",
   "type": "module",
   "main": "dist-electron/main/index.js",
   "scripts": {
