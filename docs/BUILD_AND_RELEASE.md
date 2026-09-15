@@ -106,10 +106,11 @@ shell\publish.bat --yes           # 覆盖同版本号时不弹确认
 
 ## 5. 沙箱 / 受限环境下的替代流程（`publish.mjs` 不可用时）
 
-**为什么用不了**：本环境的文件系统限制「**含子目录的目录无法重命名**」（最小复现
-`mkdir -p .ren/nested && mv .ren .ren2` → `Permission denied`）。而 electron-builder 默认流程的收尾是
-`fs.rm(win-unpacked)` + `fs.rename(win-unpacked.tmp → win-unpacked)`，该目录含 `locales/`、`resources/`
-子目录 → **恒 `EPERM`**。这是环境问题，不是项目问题。
+**为什么（曾经）用不了**：本环境的文件系统限制「**含子目录的目录无法重命名**」（最小复现
+`mkdir -p .ren/nested && mv .ren .ren2` → `Permission denied`）。electron-builder 的 `extractArchive()`
+收尾是 `fs.rm(win-unpacked)` + `fs.rename(win-unpacked.tmp → win-unpacked)`，而该目录含 `locales/`、
+`resources/` 子目录 —— **一旦需要 rename 覆盖就 `EPERM`**。这是环境问题，不是项目问题。
+（`publish.mjs` 另有独立障碍：它硬编码的 `System32\OpenSSH\ssh.exe` 在本沙箱被拦，见 5.1.1。）
 
 **逃生通道**：把 `electronDist` 指向**已解压的 Electron 目录**。`ElectronFramework.js` 的 `selectElectron()`
 对「目录且不含默认 zip 名」走 `emptyDir(appOutDir)` + `copyDir(source, destination)` 分支，**全程无 rename**。
